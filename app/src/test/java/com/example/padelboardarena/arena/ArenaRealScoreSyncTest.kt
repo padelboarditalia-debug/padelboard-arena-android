@@ -193,6 +193,68 @@ class ArenaRealScoreSyncTest {
         )
     }
 
+    @Test
+    fun validUndoEnqueuesOneArenaSend() {
+        val sender =
+            RecordingArenaScoreSnapshotSender()
+
+        val sync =
+            syncWith(
+                sender = sender
+            )
+
+        sync.enqueue(
+            scoreState(
+                pointsA = "15",
+                pointsB = "0",
+                gamesA = 1,
+                gamesB = 0
+            )
+        )
+
+        assertEquals(1, sender.snapshots.size)
+    }
+
+    @Test
+    fun undoWithEmptyHistoryDoesNotEnqueueArenaSend() {
+        val sender =
+            RecordingArenaScoreSnapshotSender()
+
+        syncWith(
+            sender = sender
+        )
+
+        assertEquals(0, sender.snapshots.size)
+    }
+
+    @Test
+    fun validUndoSnapshotRepresentsRestoredState() {
+        val sender =
+            RecordingArenaScoreSnapshotSender()
+
+        val sync =
+            syncWith(
+                sender = sender
+            )
+
+        sync.enqueue(
+            scoreState(
+                pointsA = "0",
+                pointsB = "40",
+                gamesA = 2,
+                gamesB = 3
+            )
+        )
+
+        val snapshot =
+            sender.snapshots.single()
+
+        assertEquals("0", snapshot.sideA.points)
+        assertEquals("40", snapshot.sideB.points)
+        assertEquals(2, snapshot.sideA.games)
+        assertEquals(3, snapshot.sideB.games)
+    }
+
     private fun syncWith(
         sender: ArenaScoreSnapshotSender,
         onError: (Throwable) -> Unit = {}
@@ -223,7 +285,7 @@ class ArenaRealScoreSyncTest {
         return ArenaRealScoreSync(
             snapshotFactory = factory,
             sender = sender,
-            onResult = {},
+            onResult = { _, _ -> },
             onError = onError
         )
     }
@@ -250,10 +312,11 @@ private class RecordingArenaScoreSnapshotSender :
 
     override fun sendSnapshot(
         snapshot: ArenaScoreSnapshot,
-        callback: (ArenaApiResult) -> Unit
+        callback: (ArenaScoreSnapshot, ArenaApiResult) -> Unit
     ) {
         snapshots.add(snapshot)
         callback(
+            snapshot,
             ArenaApiResult.fromHttp(
                 statusCode = 200,
                 body = "ok"
@@ -266,7 +329,7 @@ private class ThrowingArenaScoreSnapshotSender :
     ArenaScoreSnapshotSender {
     override fun sendSnapshot(
         snapshot: ArenaScoreSnapshot,
-        callback: (ArenaApiResult) -> Unit
+        callback: (ArenaScoreSnapshot, ArenaApiResult) -> Unit
     ) {
         throw java.io.IOException(
             "network unavailable"

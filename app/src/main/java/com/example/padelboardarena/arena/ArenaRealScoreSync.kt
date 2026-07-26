@@ -45,7 +45,7 @@ class ArenaRealScoreSnapshotFactory(
 interface ArenaScoreSnapshotSender {
     fun sendSnapshot(
         snapshot: ArenaScoreSnapshot,
-        callback: (ArenaApiResult) -> Unit
+        callback: (ArenaScoreSnapshot, ArenaApiResult) -> Unit
     )
 }
 
@@ -54,11 +54,16 @@ class ArenaApiScoreSnapshotSender(
 ) : ArenaScoreSnapshotSender {
     override fun sendSnapshot(
         snapshot: ArenaScoreSnapshot,
-        callback: (ArenaApiResult) -> Unit
+        callback: (ArenaScoreSnapshot, ArenaApiResult) -> Unit
     ) {
         apiClient.sendState(
             snapshot = snapshot,
-            callback = callback
+            callback = { result ->
+                callback(
+                    snapshot,
+                    result
+                )
+            }
         )
     }
 }
@@ -66,7 +71,7 @@ class ArenaApiScoreSnapshotSender(
 class ArenaRealScoreSync(
     private val snapshotFactory: ArenaRealScoreSnapshotFactory,
     private val sender: ArenaScoreSnapshotSender,
-    private val onResult: (ArenaApiResult) -> Unit,
+    private val onResult: (ArenaScoreSnapshot, ArenaApiResult) -> Unit,
     private val onError: (Throwable) -> Unit
 ) {
     fun enqueue(

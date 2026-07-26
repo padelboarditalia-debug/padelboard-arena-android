@@ -4,21 +4,7 @@ object ArenaManualUiMessages {
     fun loginFailed(
         error: Throwable
     ): String {
-        val message =
-            error.message.orEmpty()
-
-        return when {
-            message.contains("HTTP 400") ||
-                    message.contains("HTTP 401") ->
-                "Login Arena non riuscito: credenziali non valide"
-
-            message.contains("ARENA_") ||
-                    message.contains("SUPABASE_") ->
-                "Login Arena non riuscito: configurazione incompleta"
-
-            else ->
-                "Login Arena non riuscito: rete non disponibile"
-        }
+        return "Login Arena richiesto"
     }
 
     fun apiResult(
@@ -26,44 +12,34 @@ object ArenaManualUiMessages {
     ): String {
         return when (result.statusCode) {
             in 200..299 ->
-                "Invio Arena riuscito"
-
-            400 ->
-                "Invio Arena non valido: 400"
+                "Arena aggiornata"
 
             401 ->
-                "Invio Arena non autorizzato: 401"
-
-            403 ->
-                "Invio Arena vietato: 403"
-
-            404 ->
-                "Campo Arena non trovato: 404"
-
-            409 ->
-                "Invio Arena in conflitto: 409"
-
-            in 500..599 ->
-                "Errore server Arena: ${result.statusCode}"
+                "Login Arena richiesto"
 
             else ->
-                "Invio Arena fallito: ${result.statusCode}"
+                "Invio Arena fallito"
         }
+    }
+
+    fun apiDiagnostic(
+        label: String,
+        snapshot: ArenaScoreSnapshot,
+        result: ArenaApiResult
+    ): String {
+        return "$label: HTTP ${result.statusCode}\n" +
+                "body: ${result.body}\n" +
+                "eventId: ${snapshot.eventId}\n" +
+                "eventSequence: ${snapshot.eventSequence}\n" +
+                "pointsA: ${snapshot.sideA.points}, " +
+                "pointsB: ${snapshot.sideB.points}\n" +
+                "gamesA: ${snapshot.sideA.games}, " +
+                "gamesB: ${snapshot.sideB.games}"
     }
 
     fun apiFailed(
         error: Throwable
     ): String {
-        val message =
-            error.message.orEmpty()
-
-        return if (
-            message.contains("ARENA_") ||
-            message.contains("SUPABASE_")
-        ) {
-            "Invio Arena fallito: configurazione incompleta"
-        } else {
-            "Invio Arena fallito: rete non disponibile"
-        }
+        return "Invio Arena fallito"
     }
 }

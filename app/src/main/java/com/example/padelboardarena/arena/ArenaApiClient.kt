@@ -17,11 +17,20 @@ class ArenaApiClient(
         callback: (ArenaApiResult) -> Unit
     ) {
         executor.execute {
-            callback(
-                sendStateBlocking(
-                    snapshot = snapshot
+            try {
+                callback(
+                    sendStateBlocking(
+                        snapshot = snapshot
+                    )
                 )
-            )
+            } catch (error: Exception) {
+                callback(
+                    ArenaApiResult.fromHttp(
+                        statusCode = 0,
+                        body = "network_error: ${error.message.orEmpty()}"
+                    )
+                )
+            }
         }
     }
 

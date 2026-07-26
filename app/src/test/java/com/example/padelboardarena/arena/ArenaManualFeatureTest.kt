@@ -107,42 +107,82 @@ class ArenaManualFeatureTest {
     @Test
     fun uiMessagesMapExpectedApiOutcomes() {
         assertEquals(
-            "Invio Arena riuscito",
+            "Arena aggiornata",
             ArenaManualUiMessages.apiResult(
                 ArenaApiResult.fromHttp(200, "ok")
             )
         )
         assertEquals(
-            "Invio Arena non autorizzato: 401",
+            "Login Arena richiesto",
             ArenaManualUiMessages.apiResult(
                 ArenaApiResult.fromHttp(401, "")
             )
         )
         assertEquals(
-            "Invio Arena vietato: 403",
+            "Invio Arena fallito",
             ArenaManualUiMessages.apiResult(
                 ArenaApiResult.fromHttp(403, "")
             )
         )
         assertEquals(
-            "Campo Arena non trovato: 404",
+            "Invio Arena fallito",
             ArenaManualUiMessages.apiResult(
                 ArenaApiResult.fromHttp(404, "")
             )
         )
         assertEquals(
-            "Invio Arena in conflitto: 409",
+            "Invio Arena fallito",
             ArenaManualUiMessages.apiResult(
                 ArenaApiResult.fromHttp(409, "")
             )
         )
         assertEquals(
-            "Errore server Arena: 500",
+            "Invio Arena fallito",
             ArenaManualUiMessages.apiResult(
                 ArenaApiResult.fromHttp(500, "")
             )
         )
     }
+
+    @Test
+    fun diagnosticMessageIncludesResponseAndSnapshot() {
+        val snapshot =
+            ArenaManualSnapshotFactory(
+                sequenceStore =
+                    PersistedArenaManualSequenceStore(
+                        readSequence = { 40 },
+                        writeSequence = {}
+                    ),
+                now = {
+                    Instant.parse(
+                        "2026-07-26T10:00:00Z"
+                    )
+                },
+                newEventId = {
+                    "event-diagnostic"
+                }
+            ).createSnapshot()
+
+        val message =
+            ArenaManualUiMessages.apiDiagnostic(
+                label = "Arena manuale",
+                snapshot = snapshot,
+                result = ArenaApiResult.fromHttp(
+                    statusCode = 200,
+                    body = "{\"result\":\"duplicate_event\"}"
+                )
+            )
+
+        assertTrue(message.contains("HTTP 200"))
+        assertTrue(message.contains("duplicate_event"))
+        assertTrue(message.contains("event-diagnostic"))
+        assertTrue(message.contains("eventSequence: 41"))
+        assertTrue(message.contains("pointsA: 15"))
+        assertTrue(message.contains("pointsB: 0"))
+        assertTrue(message.contains("gamesA: 0"))
+        assertTrue(message.contains("gamesB: 0"))
+    }
+
 
     @Test
     fun failedLoginMapsToInvalidCredentials() {
@@ -167,7 +207,7 @@ class ArenaManualFeatureTest {
 
         assertTrue(error != null)
         assertEquals(
-            "Login Arena non riuscito: credenziali non valide",
+            "Login Arena richiesto",
             ArenaManualUiMessages.loginFailed(
                 error!!
             )
@@ -215,7 +255,7 @@ class ArenaManualFeatureTest {
 
         assertEquals(409, result.statusCode)
         assertEquals(
-            "Invio Arena in conflitto: 409",
+            "Invio Arena fallito",
             ArenaManualUiMessages.apiResult(result)
         )
     }

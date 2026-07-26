@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -20,6 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.example.padelboardarena.arena.ArenaApiClient
+import com.example.padelboardarena.arena.ArenaApiResult
 import com.example.padelboardarena.arena.ArenaApiScoreSnapshotSender
 import com.example.padelboardarena.arena.ArenaAuthClient
 import com.example.padelboardarena.arena.ArenaBuildConfig
@@ -28,6 +30,7 @@ import com.example.padelboardarena.arena.ArenaManualUiMessages
 import com.example.padelboardarena.arena.ArenaRealScoreSnapshotFactory
 import com.example.padelboardarena.arena.ArenaRealScoreState
 import com.example.padelboardarena.arena.ArenaRealScoreSync
+import com.example.padelboardarena.arena.ArenaScoreSnapshot
 import com.example.padelboardarena.arena.SharedPreferencesArenaManualSequenceStore
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -70,6 +73,9 @@ class MainActivity : AppCompatActivity() {
          * per evitare di catturare la coda del pacchetto precedente.
          */
         private const val ASSIGNMENT_ARM_DELAY_MS = 700L
+
+        private const val ARENA_LOG_TAG =
+            "PadelBoardArena"
     }
 
     private lateinit var statusText: TextView
@@ -190,12 +196,13 @@ class MainActivity : AppCompatActivity() {
                 ArenaApiScoreSnapshotSender(
                     arenaApiClient
                 ),
-            onResult = { result ->
+            onResult = { snapshot, result ->
                 runOnUiThread {
-                    arenaLastCallText.text =
-                        ArenaManualUiMessages.apiResult(
-                            result
-                        )
+                    showArenaApiDiagnostic(
+                        label = "Arena reale",
+                        snapshot = snapshot,
+                        result = result
+                    )
                 }
             },
             onError = { error ->
@@ -399,8 +406,10 @@ class MainActivity : AppCompatActivity() {
             "Ultima chiamata Arena: invio in corso"
 
         arenaManualExecutor.execute {
+            var snapshot: ArenaScoreSnapshot? = null
+
             try {
-                val snapshot =
+                snapshot =
                     arenaManualSnapshotFactory
                         .createSnapshot()
 
@@ -410,23 +419,71 @@ class MainActivity : AppCompatActivity() {
                     )
 
                 runOnUiThread {
-                    arenaLastCallText.text =
-                        ArenaManualUiMessages.apiResult(
-                            result
-                        )
+                    showArenaApiDiagnostic(
+                        label = "Arena manuale",
+                        snapshot = snapshot,
+                        result = result
+                    )
                     arenaSendTestButton.isEnabled =
                         arenaAuthClient.currentAccessToken() != null
                 }
             } catch (error: Exception) {
                 runOnUiThread {
-                    arenaLastCallText.text =
-                        ArenaManualUiMessages.apiFailed(
-                            error
+                    val sentSnapshot =
+                        snapshot
+
+                    if (sentSnapshot != null) {
+                        showArenaApiDiagnostic(
+                            label = "Arena manuale",
+                            snapshot = sentSnapshot,
+                            result =
+                                ArenaApiResult.fromHttp(
+                                    statusCode = 0,
+                                    body = "network_error: ${error.message.orEmpty()}"
+                                )
                         )
+                    } else {
+                        arenaLastCallText.text =
+                            ArenaManualUiMessages.apiFailed(
+                                error
+                            )
+                    }
+
+                    if (BuildConfig.DEBUG) {
+                        Log.w(
+                            ARENA_LOG_TAG,
+                            "Arena manuale failed: ${error.message}"
+                        )
+                    }
                     arenaSendTestButton.isEnabled =
                         arenaAuthClient.currentAccessToken() != null
                 }
             }
+        }
+    }
+
+    private fun showArenaApiDiagnostic(
+        label: String,
+        snapshot: ArenaScoreSnapshot,
+        result: ArenaApiResult
+    ) {
+        val diagnostic =
+            ArenaManualUiMessages.apiDiagnostic(
+                label = label,
+                snapshot = snapshot,
+                result = result
+            )
+
+        arenaLastCallText.text =
+            ArenaManualUiMessages.apiResult(
+                result
+            )
+
+        if (BuildConfig.DEBUG) {
+            Log.i(
+                ARENA_LOG_TAG,
+                diagnostic
+            )
         }
     }
 
@@ -1451,8 +1508,7 @@ class MainActivity : AppCompatActivity() {
         eventText.text =
             "Doppia pressione"
 
-        saveState()
-        updateScreen()
+        saveStateUpdateScreenAndEnqueueArenaSnapshot()
     }
 
     private fun resetMatch() {
