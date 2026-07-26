@@ -24,12 +24,14 @@ import com.example.padelboardarena.arena.ArenaApiClient
 import com.example.padelboardarena.arena.ArenaApiResult
 import com.example.padelboardarena.arena.ArenaApiScoreSnapshotSender
 import com.example.padelboardarena.arena.ArenaAuthClient
+import com.example.padelboardarena.arena.AndroidKeystoreArenaSessionStore
 import com.example.padelboardarena.arena.ArenaBuildConfig
 import com.example.padelboardarena.arena.ArenaManualUiMessages
 import com.example.padelboardarena.arena.ArenaRealScoreSnapshotFactory
 import com.example.padelboardarena.arena.ArenaRealScoreState
 import com.example.padelboardarena.arena.ArenaRealScoreSync
 import com.example.padelboardarena.arena.ArenaScoreSnapshot
+import com.example.padelboardarena.arena.ArenaSessionRestoreResult
 import com.example.padelboardarena.arena.SharedPreferencesArenaManualSequenceStore
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -159,9 +161,16 @@ class MainActivity : AppCompatActivity() {
         ArenaBuildConfig.load()
     }
 
+    private val arenaSessionStore by lazy {
+        AndroidKeystoreArenaSessionStore(
+            this
+        )
+    }
+
     private val arenaAuthClient by lazy {
         ArenaAuthClient(
-            config = arenaConfig
+            config = arenaConfig,
+            sessionStore = arenaSessionStore
         )
     }
 
@@ -244,7 +253,9 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         loadSavedData()
         updateScreen()
+        startBleScanIfDevicesAssigned()
         setupArenaManualTest()
+        bootstrapArenaSession()
 
         startButton.setOnClickListener {
             if (scanning) {
@@ -335,6 +346,39 @@ class MainActivity : AppCompatActivity() {
     private fun setupArenaManualTest() {
         arenaLoginButton.setOnClickListener {
             runArenaLogin()
+        }
+    }
+
+    private fun bootstrapArenaSession() {
+        arenaLoginButton.isEnabled = false
+        arenaConnectionStatusText.text =
+            "Arena: ripristino sessione"
+
+        arenaManualExecutor.execute {
+            val result =
+                arenaAuthClient.restorePersistedSession()
+
+            runOnUiThread {
+                when (result) {
+                    ArenaSessionRestoreResult.RESTORED -> {
+                        arenaConnectionStatusText.text =
+                            "Arena connessa"
+                        arenaLoginButton.isEnabled = true
+                    }
+
+                    ArenaSessionRestoreResult.MISSING -> {
+                        arenaConnectionStatusText.text =
+                            "Arena: non connesso"
+                        arenaLoginButton.isEnabled = true
+                    }
+
+                    ArenaSessionRestoreResult.FAILED -> {
+                        arenaConnectionStatusText.text =
+                            "Login Arena richiesto"
+                        arenaLoginButton.isEnabled = true
+                    }
+                }
+            }
         }
     }
 
@@ -581,6 +625,22 @@ class MainActivity : AppCompatActivity() {
                 gamesB = gamesB
             )
         )
+    }
+
+    private fun hasAnyShellyAssociation(): Boolean {
+        return deviceA != null || deviceB != null
+    }
+
+    private fun startBleScanIfDevicesAssigned() {
+        if (!hasAnyShellyAssociation()) {
+            return
+        }
+
+        if (scanning) {
+            return
+        }
+
+        checkPermissionsAndStart()
     }
 
     private fun beginAssignment(

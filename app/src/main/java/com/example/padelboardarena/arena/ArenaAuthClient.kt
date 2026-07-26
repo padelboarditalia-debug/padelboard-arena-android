@@ -1,11 +1,19 @@
 package com.example.padelboardarena.arena
 
+enum class ArenaSessionRestoreResult {
+    RESTORED,
+    MISSING,
+    FAILED
+}
+
 class ArenaAuthClient(
     private val config: ArenaConfig,
     private val transport: ArenaHttpTransport =
         UrlConnectionArenaHttpTransport(),
     private val clockMillis: () -> Long =
-        { System.currentTimeMillis() }
+        { System.currentTimeMillis() },
+    private val sessionStore: ArenaSessionStore =
+        NoopArenaSessionStore
 ) : ArenaTokenProvider {
     @Volatile
     private var session: ArenaAuthSession? = null
@@ -38,7 +46,26 @@ class ArenaAuthClient(
             body = response.body,
             receivedAtMillis = clockMillis()
         ).also { newSession ->
-            session = newSession
+            setSession(
+                newSession
+            )
+        }
+    }
+
+    fun restorePersistedSession(): ArenaSessionRestoreResult {
+        val refreshToken =
+            sessionStore.readRefreshToken()
+                ?: return ArenaSessionRestoreResult.MISSING
+
+        return if (
+            tryRefreshSession(
+                refreshToken
+            ) != null
+        ) {
+            ArenaSessionRestoreResult.RESTORED
+        } else {
+            clearSession()
+            ArenaSessionRestoreResult.FAILED
         }
     }
 
@@ -51,6 +78,31 @@ class ArenaAuthClient(
             session?.refreshToken
                 ?: return null
 
+        val refreshedSession =
+            tryRefreshSession(
+                refreshToken
+            )
+
+        if (refreshedSession == null) {
+            clearSession()
+        }
+
+        return refreshedSession?.accessToken
+    }
+
+    private fun tryRefreshSession(
+        refreshToken: String
+    ): ArenaAuthSession? {
+        return runCatching {
+            refreshSession(
+                refreshToken
+            )
+        }.getOrNull()
+    }
+
+    private fun refreshSession(
+        refreshToken: String
+    ): ArenaAuthSession? {
         val response =
             transport.execute(
                 ArenaHttpRequest(
@@ -69,15 +121,28 @@ class ArenaAuthClient(
             return null
         }
 
-        val refreshedSession =
-            ArenaAuthSession.fromJson(
-                body = response.body,
-                receivedAtMillis = clockMillis()
+        return ArenaAuthSession.fromJson(
+            body = response.body,
+            receivedAtMillis = clockMillis()
+        ).also { refreshedSession ->
+            setSession(
+                refreshedSession
             )
+        }
+    }
 
-        session = refreshedSession
+    private fun setSession(
+        newSession: ArenaAuthSession
+    ) {
+        session = newSession
+        sessionStore.saveSession(
+            newSession
+        )
+    }
 
-        return refreshedSession.accessToken
+    private fun clearSession() {
+        session = null
+        sessionStore.clear()
     }
 
     private fun authHeaders(): Map<String, String> {
