@@ -1,0 +1,253 @@
+package com.example.padelboardarena.arena
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ArenaClientTest {
+    @Test
+    fun scoreSnapshotSerializesExpectedPayload() {
+        val snapshot =
+            sampleSnapshot()
+
+        assertEquals(
+            "{" +
+                    "\"eventId\":\"uuid\"," +
+                    "\"eventSequence\":1," +
+                    "\"occurredAt\":\"2026-07-26T10:00:00Z\"," +
+                    "\"matchStatus\":\"playing\"," +
+                    "\"phase\":\"Set 1\"," +
+                    "\"sideA\":{" +
+                    "\"label\":\"Squadra A\"," +
+                    "\"points\":\"15\"," +
+                    "\"games\":0," +
+                    "\"sets\":0" +
+                    "}," +
+                    "\"sideB\":{" +
+                    "\"label\":\"Squadra B\"," +
+                    "\"points\":\"0\"," +
+                    "\"games\":0," +
+                    "\"sets\":0" +
+                    "}" +
+                    "}",
+            snapshot.toJson()
+        )
+    }
+
+    @Test
+    fun authResponseParsesSession() {
+        val session =
+            ArenaAuthSession.fromJson(
+                body = "{" +
+                        "\"access_token\":\"access\"," +
+                        "\"refresh_token\":\"refresh\"," +
+                        "\"expires_in\":3600" +
+                        "}",
+                receivedAtMillis = 123L
+            )
+
+        assertEquals("access", session.accessToken)
+        assertEquals("refresh", session.refreshToken)
+        assertEquals(3600L, session.expiresIn)
+        assertEquals(123L, session.receivedAtMillis)
+    }
+
+    @Test
+    fun apiResponseParsesConflict() {
+        val result =
+            ArenaApiResult.fromHttp(
+                statusCode = 409,
+                body = "{\"error\":\"conflict\"}"
+            )
+
+        assertEquals(409, result.statusCode)
+        assertFalse(result.success)
+        assertFalse(result.retryable)
+        assertEquals("{\"error\":\"conflict\"}", result.body)
+    }
+
+    @Test
+    fun stateUrlUsesConfiguredBaseUrlAndCourtId() {
+        val client =
+            ArenaApiClient(
+                config = sampleConfig(),
+                tokenProvider = StaticTokenProvider(
+                    accessToken = "access"
+                ),
+                transport = FakeTransport()
+            )
+
+        assertEquals(
+            "http://10.0.2.2:3000/api/arena/courts/court-1/state",
+            client.stateUrl()
+        )
+    }
+
+    @Test
+    fun unauthorizedRefreshesOnceAndRetriesOnce() {
+        val transport =
+            FakeTransport(
+                ArenaHttpResponse(
+                    statusCode = 401,
+                    body = "unauthorized"
+                ),
+                ArenaHttpResponse(
+                    statusCode = 200,
+                    body = "ok"
+                )
+            )
+
+        val tokenProvider =
+            CountingTokenProvider(
+                accessToken = "expired",
+                refreshedToken = "fresh"
+            )
+
+        val client =
+            ArenaApiClient(
+                config = sampleConfig(),
+                tokenProvider = tokenProvider,
+                transport = transport
+            )
+
+        val result =
+            client.sendStateBlocking(
+                sampleSnapshot()
+            )
+
+        assertEquals(200, result.statusCode)
+        assertTrue(result.success)
+        assertEquals(1, tokenProvider.refreshCount)
+        assertEquals(2, transport.requests.size)
+        assertEquals(
+            "Bearer expired",
+            transport.requests[0].headers["Authorization"]
+        )
+        assertEquals(
+            "Bearer fresh",
+            transport.requests[1].headers["Authorization"]
+        )
+    }
+
+    @Test
+    fun conflictDoesNotRefresh() {
+        val transport =
+            FakeTransport(
+                ArenaHttpResponse(
+                    statusCode = 409,
+                    body = "conflict"
+                )
+            )
+
+        val tokenProvider =
+            CountingTokenProvider(
+                accessToken = "access",
+                refreshedToken = "fresh"
+            )
+
+        val client =
+            ArenaApiClient(
+                config = sampleConfig(),
+                tokenProvider = tokenProvider,
+                transport = transport
+            )
+
+        val result =
+            client.sendStateBlocking(
+                sampleSnapshot()
+            )
+
+        assertEquals(409, result.statusCode)
+        assertEquals(0, tokenProvider.refreshCount)
+        assertEquals(1, transport.requests.size)
+    }
+
+    private fun sampleSnapshot(): ArenaScoreSnapshot {
+        return ArenaScoreSnapshot(
+            eventId = "uuid",
+            eventSequence = 1,
+            occurredAt = "2026-07-26T10:00:00Z",
+            matchStatus = "playing",
+            phase = "Set 1",
+            sideA = ArenaScoreSide(
+                label = "Squadra A",
+                points = "15",
+                games = 0,
+                sets = 0
+            ),
+            sideB = ArenaScoreSide(
+                label = "Squadra B",
+                points = "0",
+                games = 0,
+                sets = 0
+            )
+        )
+    }
+
+    private fun sampleConfig(): ArenaConfig {
+        return ArenaConfig(
+            apiBaseUrl = "http://10.0.2.2:3000/",
+            courtId = "/court-1/",
+            supabaseUrl = "https://example.supabase.co",
+            supabasePublishableKey = "publishable",
+            email = "arena@example.com"
+        )
+    }
+}
+
+private class FakeTransport(
+    vararg responses: ArenaHttpResponse
+) : ArenaHttpTransport {
+    private val pendingResponses =
+        ArrayDeque(
+            responses.toList()
+        )
+
+    val requests =
+        mutableListOf<ArenaHttpRequest>()
+
+    override fun execute(
+        request: ArenaHttpRequest
+    ): ArenaHttpResponse {
+        requests.add(request)
+
+        return if (pendingResponses.isEmpty()) {
+            ArenaHttpResponse(
+                statusCode = 500,
+                body = "missing fake response"
+            )
+        } else {
+            pendingResponses.removeFirst()
+        }
+    }
+}
+
+private class StaticTokenProvider(
+    private val accessToken: String
+) : ArenaTokenProvider {
+    override fun currentAccessToken(): String {
+        return accessToken
+    }
+
+    override fun refreshAccessToken(): String? {
+        return null
+    }
+}
+
+private class CountingTokenProvider(
+    private val accessToken: String,
+    private val refreshedToken: String
+) : ArenaTokenProvider {
+    var refreshCount = 0
+
+    override fun currentAccessToken(): String {
+        return accessToken
+    }
+
+    override fun refreshAccessToken(): String {
+        refreshCount += 1
+
+        return refreshedToken
+    }
+}
