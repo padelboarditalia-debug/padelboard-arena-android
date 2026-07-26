@@ -217,16 +217,6 @@
             android:layout_width="match_parent"
             android:layout_height="24dp" />
 
-        <TextView
-            android:id="@+id/arenaManualTitleText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Test Arena"
-            android:textSize="20sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:paddingBottom="8dp" />
-
         <EditText
             android:id="@+id/arenaPasswordEditText"
             android:layout_width="match_parent"
@@ -240,13 +230,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Login Arena" />
-
-        <Button
-            android:id="@+id/arenaSendTestButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:enabled="false"
-            android:text="Invia test Arena" />
 
         <TextView
             android:id="@+id/arenaConnectionStatusText"

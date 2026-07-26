@@ -25,7 +25,6 @@ import com.example.padelboardarena.arena.ArenaApiResult
 import com.example.padelboardarena.arena.ArenaApiScoreSnapshotSender
 import com.example.padelboardarena.arena.ArenaAuthClient
 import com.example.padelboardarena.arena.ArenaBuildConfig
-import com.example.padelboardarena.arena.ArenaManualSnapshotFactory
 import com.example.padelboardarena.arena.ArenaManualUiMessages
 import com.example.padelboardarena.arena.ArenaRealScoreSnapshotFactory
 import com.example.padelboardarena.arena.ArenaRealScoreState
@@ -98,7 +97,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var resetDevicesButton: Button
     private lateinit var arenaPasswordEditText: EditText
     private lateinit var arenaLoginButton: Button
-    private lateinit var arenaSendTestButton: Button
     private lateinit var arenaConnectionStatusText: TextView
     private lateinit var arenaLastCallText: TextView
 
@@ -171,15 +169,6 @@ class MainActivity : AppCompatActivity() {
         ArenaApiClient(
             config = arenaConfig,
             tokenProvider = arenaAuthClient
-        )
-    }
-
-    private val arenaManualSnapshotFactory by lazy {
-        ArenaManualSnapshotFactory(
-            sequenceStore =
-                SharedPreferencesArenaManualSequenceStore(
-                    preferences
-                )
         )
     }
 
@@ -335,8 +324,6 @@ class MainActivity : AppCompatActivity() {
         arenaLoginButton =
             findViewById(R.id.arenaLoginButton)
 
-        arenaSendTestButton =
-            findViewById(R.id.arenaSendTestButton)
 
         arenaConnectionStatusText =
             findViewById(R.id.arenaConnectionStatusText)
@@ -346,14 +333,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupArenaManualTest() {
-        arenaSendTestButton.isEnabled = false
-
         arenaLoginButton.setOnClickListener {
             runArenaLogin()
-        }
-
-        arenaSendTestButton.setOnClickListener {
-            runArenaSendTest()
         }
     }
 
@@ -370,7 +351,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         arenaLoginButton.isEnabled = false
-        arenaSendTestButton.isEnabled = false
         arenaConnectionStatusText.text =
             "Arena: login in corso"
 
@@ -384,7 +364,6 @@ class MainActivity : AppCompatActivity() {
                     arenaPasswordEditText.text?.clear()
                     arenaConnectionStatusText.text =
                         "Arena: login riuscito"
-                    arenaSendTestButton.isEnabled = true
                     arenaLoginButton.isEnabled = true
                 }
             } catch (error: Exception) {
@@ -393,70 +372,7 @@ class MainActivity : AppCompatActivity() {
                         ArenaManualUiMessages.loginFailed(
                             error
                         )
-                    arenaSendTestButton.isEnabled = false
                     arenaLoginButton.isEnabled = true
-                }
-            }
-        }
-    }
-
-    private fun runArenaSendTest() {
-        arenaSendTestButton.isEnabled = false
-        arenaLastCallText.text =
-            "Ultima chiamata Arena: invio in corso"
-
-        arenaManualExecutor.execute {
-            var snapshot: ArenaScoreSnapshot? = null
-
-            try {
-                snapshot =
-                    arenaManualSnapshotFactory
-                        .createSnapshot()
-
-                val result =
-                    arenaApiClient.sendStateBlocking(
-                        snapshot
-                    )
-
-                runOnUiThread {
-                    showArenaApiDiagnostic(
-                        label = "Arena manuale",
-                        snapshot = snapshot,
-                        result = result
-                    )
-                    arenaSendTestButton.isEnabled =
-                        arenaAuthClient.currentAccessToken() != null
-                }
-            } catch (error: Exception) {
-                runOnUiThread {
-                    val sentSnapshot =
-                        snapshot
-
-                    if (sentSnapshot != null) {
-                        showArenaApiDiagnostic(
-                            label = "Arena manuale",
-                            snapshot = sentSnapshot,
-                            result =
-                                ArenaApiResult.fromHttp(
-                                    statusCode = 0,
-                                    body = "network_error: ${error.message.orEmpty()}"
-                                )
-                        )
-                    } else {
-                        arenaLastCallText.text =
-                            ArenaManualUiMessages.apiFailed(
-                                error
-                            )
-                    }
-
-                    if (BuildConfig.DEBUG) {
-                        Log.w(
-                            ARENA_LOG_TAG,
-                            "Arena manuale failed: ${error.message}"
-                        )
-                    }
-                    arenaSendTestButton.isEnabled =
-                        arenaAuthClient.currentAccessToken() != null
                 }
             }
         }
