@@ -217,25 +217,17 @@
             android:layout_width="match_parent"
             android:layout_height="24dp" />
 
-        <EditText
-            android:id="@+id/arenaPasswordEditText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Password E2E"
-            android:inputType="textPassword"
-            android:singleLine="true" />
-
         <Button
-            android:id="@+id/arenaLoginButton"
+            android:id="@+id/arenaSettingsButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Login Arena" />
+            android:text="Impostazioni Arena" />
 
         <TextView
             android:id="@+id/arenaConnectionStatusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Arena: non connesso"
+            android:text="Login Arena richiesto"
             android:textSize="14sp"
             android:gravity="center"
             android:paddingTop="8dp" />

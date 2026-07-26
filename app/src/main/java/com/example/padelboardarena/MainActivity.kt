@@ -8,13 +8,13 @@ import android.bluetooth.le.ScanRecord
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.util.Log
 import android.widget.Button
-import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -97,8 +97,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var assignBButton: Button
     private lateinit var resetScoreButton: Button
     private lateinit var resetDevicesButton: Button
-    private lateinit var arenaPasswordEditText: EditText
-    private lateinit var arenaLoginButton: Button
+    private lateinit var arenaSettingsButton: Button
     private lateinit var arenaConnectionStatusText: TextView
     private lateinit var arenaLastCallText: TextView
 
@@ -226,6 +225,13 @@ class MainActivity : AppCompatActivity() {
         )
     )
 
+    private val arenaSettingsLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) {
+            bootstrapArenaSession()
+        }
+
     private val permissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
@@ -254,7 +260,6 @@ class MainActivity : AppCompatActivity() {
         loadSavedData()
         updateScreen()
         startBleScanIfDevicesAssigned()
-        setupArenaManualTest()
         bootstrapArenaSession()
 
         startButton.setOnClickListener {
@@ -283,6 +288,10 @@ class MainActivity : AppCompatActivity() {
 
         resetDevicesButton.setOnClickListener {
             resetDeviceAssignments()
+        }
+
+        arenaSettingsButton.setOnClickListener {
+            openArenaSettings()
         }
     }
 
@@ -329,12 +338,8 @@ class MainActivity : AppCompatActivity() {
         resetDevicesButton =
             findViewById(R.id.resetDevicesButton)
 
-        arenaPasswordEditText =
-            findViewById(R.id.arenaPasswordEditText)
-
-        arenaLoginButton =
-            findViewById(R.id.arenaLoginButton)
-
+        arenaSettingsButton =
+            findViewById(R.id.arenaSettingsButton)
 
         arenaConnectionStatusText =
             findViewById(R.id.arenaConnectionStatusText)
@@ -343,14 +348,7 @@ class MainActivity : AppCompatActivity() {
             findViewById(R.id.arenaLastCallText)
     }
 
-    private fun setupArenaManualTest() {
-        arenaLoginButton.setOnClickListener {
-            runArenaLogin()
-        }
-    }
-
     private fun bootstrapArenaSession() {
-        arenaLoginButton.isEnabled = false
         arenaConnectionStatusText.text =
             "Arena: ripristino sessione"
 
@@ -363,63 +361,29 @@ class MainActivity : AppCompatActivity() {
                     ArenaSessionRestoreResult.RESTORED -> {
                         arenaConnectionStatusText.text =
                             "Arena connessa"
-                        arenaLoginButton.isEnabled = true
                     }
 
                     ArenaSessionRestoreResult.MISSING -> {
                         arenaConnectionStatusText.text =
-                            "Arena: non connesso"
-                        arenaLoginButton.isEnabled = true
+                            "Login Arena richiesto"
                     }
 
                     ArenaSessionRestoreResult.FAILED -> {
                         arenaConnectionStatusText.text =
                             "Login Arena richiesto"
-                        arenaLoginButton.isEnabled = true
                     }
                 }
             }
         }
     }
 
-    private fun runArenaLogin() {
-        val password =
-            arenaPasswordEditText.text
-                ?.toString()
-                .orEmpty()
-
-        if (password.isBlank()) {
-            arenaConnectionStatusText.text =
-                "Arena: inserisci la password E2E"
-            return
-        }
-
-        arenaLoginButton.isEnabled = false
-        arenaConnectionStatusText.text =
-            "Arena: login in corso"
-
-        arenaManualExecutor.execute {
-            try {
-                arenaAuthClient.login(
-                    password = password
-                )
-
-                runOnUiThread {
-                    arenaPasswordEditText.text?.clear()
-                    arenaConnectionStatusText.text =
-                        "Arena: login riuscito"
-                    arenaLoginButton.isEnabled = true
-                }
-            } catch (error: Exception) {
-                runOnUiThread {
-                    arenaConnectionStatusText.text =
-                        ArenaManualUiMessages.loginFailed(
-                            error
-                        )
-                    arenaLoginButton.isEnabled = true
-                }
-            }
-        }
+    private fun openArenaSettings() {
+        arenaSettingsLauncher.launch(
+            Intent(
+                this,
+                ArenaSettingsActivity::class.java
+            )
+        )
     }
 
     private fun showArenaApiDiagnostic(
