@@ -13,11 +13,20 @@ import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.example.padelboardarena.arena.ArenaApiClient
+import com.example.padelboardarena.arena.ArenaAuthClient
+import com.example.padelboardarena.arena.ArenaBuildConfig
+import com.example.padelboardarena.arena.ArenaManualSnapshotFactory
+import com.example.padelboardarena.arena.ArenaManualUiMessages
+import com.example.padelboardarena.arena.SharedPreferencesArenaManualSequenceStore
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
@@ -77,6 +86,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var assignBButton: Button
     private lateinit var resetScoreButton: Button
     private lateinit var resetDevicesButton: Button
+    private lateinit var arenaPasswordEditText: EditText
+    private lateinit var arenaLoginButton: Button
+    private lateinit var arenaSendTestButton: Button
+    private lateinit var arenaConnectionStatusText: TextView
+    private lateinit var arenaLastCallText: TextView
 
     private var scanning = false
 
@@ -123,10 +137,39 @@ class MainActivity : AppCompatActivity() {
     private val scoreHistory =
         mutableListOf<ScoreSnapshot>()
 
+    private val arenaManualExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor()
+
     private val preferences by lazy {
         getSharedPreferences(
             PREFS_NAME,
             Context.MODE_PRIVATE
+        )
+    }
+
+    private val arenaConfig by lazy {
+        ArenaBuildConfig.load()
+    }
+
+    private val arenaAuthClient by lazy {
+        ArenaAuthClient(
+            config = arenaConfig
+        )
+    }
+
+    private val arenaApiClient by lazy {
+        ArenaApiClient(
+            config = arenaConfig,
+            tokenProvider = arenaAuthClient
+        )
+    }
+
+    private val arenaManualSnapshotFactory by lazy {
+        ArenaManualSnapshotFactory(
+            sequenceStore =
+                SharedPreferencesArenaManualSequenceStore(
+                    preferences
+                )
         )
     }
 
@@ -169,6 +212,7 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         loadSavedData()
         updateScreen()
+        setupArenaManualTest()
 
         startButton.setOnClickListener {
             if (scanning) {
@@ -241,6 +285,113 @@ class MainActivity : AppCompatActivity() {
 
         resetDevicesButton =
             findViewById(R.id.resetDevicesButton)
+
+        arenaPasswordEditText =
+            findViewById(R.id.arenaPasswordEditText)
+
+        arenaLoginButton =
+            findViewById(R.id.arenaLoginButton)
+
+        arenaSendTestButton =
+            findViewById(R.id.arenaSendTestButton)
+
+        arenaConnectionStatusText =
+            findViewById(R.id.arenaConnectionStatusText)
+
+        arenaLastCallText =
+            findViewById(R.id.arenaLastCallText)
+    }
+
+    private fun setupArenaManualTest() {
+        arenaSendTestButton.isEnabled = false
+
+        arenaLoginButton.setOnClickListener {
+            runArenaLogin()
+        }
+
+        arenaSendTestButton.setOnClickListener {
+            runArenaSendTest()
+        }
+    }
+
+    private fun runArenaLogin() {
+        val password =
+            arenaPasswordEditText.text
+                ?.toString()
+                .orEmpty()
+
+        if (password.isBlank()) {
+            arenaConnectionStatusText.text =
+                "Arena: inserisci la password E2E"
+            return
+        }
+
+        arenaLoginButton.isEnabled = false
+        arenaSendTestButton.isEnabled = false
+        arenaConnectionStatusText.text =
+            "Arena: login in corso"
+
+        arenaManualExecutor.execute {
+            try {
+                arenaAuthClient.login(
+                    password = password
+                )
+
+                runOnUiThread {
+                    arenaPasswordEditText.text?.clear()
+                    arenaConnectionStatusText.text =
+                        "Arena: login riuscito"
+                    arenaSendTestButton.isEnabled = true
+                    arenaLoginButton.isEnabled = true
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    arenaConnectionStatusText.text =
+                        ArenaManualUiMessages.loginFailed(
+                            error
+                        )
+                    arenaSendTestButton.isEnabled = false
+                    arenaLoginButton.isEnabled = true
+                }
+            }
+        }
+    }
+
+    private fun runArenaSendTest() {
+        arenaSendTestButton.isEnabled = false
+        arenaLastCallText.text =
+            "Ultima chiamata Arena: invio in corso"
+
+        arenaManualExecutor.execute {
+            try {
+                val snapshot =
+                    arenaManualSnapshotFactory
+                        .createSnapshot()
+
+                val result =
+                    arenaApiClient.sendStateBlocking(
+                        snapshot
+                    )
+
+                runOnUiThread {
+                    arenaLastCallText.text =
+                        ArenaManualUiMessages.apiResult(
+                            result
+                        )
+                    arenaSendTestButton.isEnabled =
+                        arenaAuthClient.currentAccessToken() != null
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    arenaLastCallText.text =
+                        ArenaManualUiMessages.apiFailed(
+                            error
+                        )
+                    arenaSendTestButton.isEnabled =
+                        arenaAuthClient.currentAccessToken() != null
+                }
+            }
+        }
     }
 
     private fun loadSavedData() {
@@ -1297,6 +1448,9 @@ class MainActivity : AppCompatActivity() {
         if (scanning) {
             stopBleScan()
         }
+
+        arenaManualExecutor.shutdownNow()
+        arenaApiClient.shutdown()
 
         super.onDestroy()
     }

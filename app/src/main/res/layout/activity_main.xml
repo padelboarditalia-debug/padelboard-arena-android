@@ -213,6 +213,59 @@
             android:gravity="center"
             android:paddingTop="18dp" />
 
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="24dp" />
+
+        <TextView
+            android:id="@+id/arenaManualTitleText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Test Arena"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:paddingBottom="8dp" />
+
+        <EditText
+            android:id="@+id/arenaPasswordEditText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Password E2E"
+            android:inputType="textPassword"
+            android:singleLine="true" />
+
+        <Button
+            android:id="@+id/arenaLoginButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Login Arena" />
+
+        <Button
+            android:id="@+id/arenaSendTestButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:enabled="false"
+            android:text="Invia test Arena" />
+
+        <TextView
+            android:id="@+id/arenaConnectionStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Arena: non connesso"
+            android:textSize="14sp"
+            android:gravity="center"
+            android:paddingTop="8dp" />
+
+        <TextView
+            android:id="@+id/arenaLastCallText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Ultima chiamata Arena: nessuna"
+            android:textSize="14sp"
+            android:gravity="center"
+            android:paddingTop="6dp" />
+
     </LinearLayout>
 
 </ScrollView>
