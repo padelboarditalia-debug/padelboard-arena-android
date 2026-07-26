@@ -20,10 +20,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.example.padelboardarena.arena.ArenaApiClient
+import com.example.padelboardarena.arena.ArenaApiScoreSnapshotSender
 import com.example.padelboardarena.arena.ArenaAuthClient
 import com.example.padelboardarena.arena.ArenaBuildConfig
 import com.example.padelboardarena.arena.ArenaManualSnapshotFactory
 import com.example.padelboardarena.arena.ArenaManualUiMessages
+import com.example.padelboardarena.arena.ArenaRealScoreSnapshotFactory
+import com.example.padelboardarena.arena.ArenaRealScoreState
+import com.example.padelboardarena.arena.ArenaRealScoreSync
 import com.example.padelboardarena.arena.SharedPreferencesArenaManualSequenceStore
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -170,6 +174,38 @@ class MainActivity : AppCompatActivity() {
                 SharedPreferencesArenaManualSequenceStore(
                     preferences
                 )
+        )
+    }
+
+    private val arenaRealScoreSync by lazy {
+        ArenaRealScoreSync(
+            snapshotFactory =
+                ArenaRealScoreSnapshotFactory(
+                    sequenceStore =
+                        SharedPreferencesArenaManualSequenceStore(
+                            preferences
+                        )
+                ),
+            sender =
+                ArenaApiScoreSnapshotSender(
+                    arenaApiClient
+                ),
+            onResult = { result ->
+                runOnUiThread {
+                    arenaLastCallText.text =
+                        ArenaManualUiMessages.apiResult(
+                            result
+                        )
+                }
+            },
+            onError = { error ->
+                runOnUiThread {
+                    arenaLastCallText.text =
+                        ArenaManualUiMessages.apiFailed(
+                            error
+                        )
+                }
+            }
         )
     }
 
@@ -551,6 +587,27 @@ class MainActivity : AppCompatActivity() {
             2 -> "30"
             else -> "40"
         }
+    }
+
+    private fun saveStateUpdateScreenAndEnqueueArenaSnapshot() {
+        saveState()
+        updateScreen()
+        enqueueArenaSnapshot()
+    }
+
+    private fun enqueueArenaSnapshot() {
+        arenaRealScoreSync.enqueue(
+            ArenaRealScoreState(
+                pointsA = displayPointForSide(
+                    Side.A
+                ),
+                pointsB = displayPointForSide(
+                    Side.B
+                ),
+                gamesA = gamesA,
+                gamesB = gamesB
+            )
+        )
     }
 
     private fun beginAssignment(
@@ -1212,8 +1269,7 @@ class MainActivity : AppCompatActivity() {
             eventText.text =
                 "Punto killer"
 
-            saveState()
-            updateScreen()
+            saveStateUpdateScreenAndEnqueueArenaSnapshot()
             return
         }
 
@@ -1249,8 +1305,7 @@ class MainActivity : AppCompatActivity() {
                     "Il prossimo punto vince il game"
             }
 
-            saveState()
-            updateScreen()
+            saveStateUpdateScreenAndEnqueueArenaSnapshot()
             return
         }
 
@@ -1282,8 +1337,7 @@ class MainActivity : AppCompatActivity() {
             eventText.text =
                 "Punto di vantaggio"
 
-            saveState()
-            updateScreen()
+            saveStateUpdateScreenAndEnqueueArenaSnapshot()
             return
         }
 
@@ -1303,8 +1357,7 @@ class MainActivity : AppCompatActivity() {
             eventText.text =
                 "Game vinto"
 
-            saveState()
-            updateScreen()
+            saveStateUpdateScreenAndEnqueueArenaSnapshot()
             return
         }
 
@@ -1326,8 +1379,7 @@ class MainActivity : AppCompatActivity() {
         eventText.text =
             "Pressione singola"
 
-        saveState()
-        updateScreen()
+        saveStateUpdateScreenAndEnqueueArenaSnapshot()
     }
 
     private fun winGame(
