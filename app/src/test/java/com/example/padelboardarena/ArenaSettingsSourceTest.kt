@@ -94,6 +94,18 @@ class ArenaSettingsSourceTest {
     }
 
     @Test
+    fun settingsLayoutContainsArenaCourtSelectionSection() {
+        val layout =
+            settingsLayout()
+
+        assertTrue(layout.contains("Campo associato"))
+        assertTrue(layout.contains("arenaSettingsCourtStatusText"))
+        assertTrue(layout.contains("Seleziona campo Arena"))
+        assertTrue(layout.contains("arenaSettingsSelectCourtButton"))
+        assertTrue(layout.contains("android:text=\"Seleziona campo\""))
+    }
+
+    @Test
     fun settingsLayoutShowsAssociatedAndMissingStates() {
         val layout =
             settingsLayout()
@@ -385,6 +397,102 @@ class ArenaSettingsSourceTest {
                 "arenaAuthClient.login("
             )
         )
+    }
+
+    @Test
+    fun settingsLoadsArenaCourtsAndSavesSelection() {
+        val source =
+            settingsActivitySource()
+
+        assertTrue(source.contains("ArenaCourtsClient("))
+        assertTrue(source.contains("ArenaCourtSelectionStore("))
+        assertTrue(source.contains("loadArenaCourtsForSelection()"))
+        assertTrue(source.contains("arenaCourtsClient.fetchCourtsBlocking()"))
+        assertTrue(source.contains("arenaCourtSelectionStore.saveSelection("))
+        assertTrue(source.contains("REQUEST_COURT_CHANGED"))
+    }
+
+    @Test
+    fun inactiveCourtIsShownButNotSelectable() {
+        val source =
+            settingsActivitySource()
+        val dialogBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun showCourtSelectionDialog(",
+                endMarker = "private fun formatCourtSelectionLabel("
+            )
+
+        assertTrue(dialogBody.contains("if (!court.isActive)"))
+        assertTrue(dialogBody.contains("Campo non attivo"))
+        assertTrue(dialogBody.indexOf("if (!court.isActive)") < dialogBody.indexOf("arenaCourtSelectionStore.saveSelection("))
+    }
+
+    @Test
+    fun unmappedCourtIsMarkedAsNotReady() {
+        val source =
+            settingsActivitySource()
+        val labelBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun formatCourtSelectionLabel(",
+                endMarker = "private fun updateShellyAssignmentUi()"
+            )
+
+        assertTrue(source.contains("Non collegato a un campo torneo"))
+        assertTrue(labelBody.contains("non pronto"))
+        assertTrue(labelBody.contains("collegato a"))
+    }
+
+    @Test
+    fun courtSelectionUsesFallbackBuildConfigOnlyWhenStoreIsEmpty() {
+        val source =
+            settingsActivitySource()
+        val updateBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun updateCourtSelectionUi()",
+                endMarker = "private fun loadArenaCourtsForSelection()"
+            )
+
+        assertTrue(updateBody.contains("arenaCourtSelectionStore.readSelection()"))
+        assertTrue(updateBody.contains("?: fallbackArenaCourtSelection()"))
+        assertTrue(source.contains("arenaConfig.courtId.trim()"))
+    }
+
+    @Test
+    fun settingsCourtSelectionDoesNotExposeTokens() {
+        val source =
+            settingsActivitySource()
+        val courtBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun loadArenaCourtsForSelection()",
+                endMarker = "private fun showCourtSelectionDialog("
+            )
+
+        assertFalse(courtBody.contains("accessToken"))
+        assertFalse(courtBody.contains("refreshToken"))
+        assertFalse(courtBody.contains("Bearer"))
+        assertFalse(courtBody.contains("result.body"))
+    }
+
+    @Test
+    fun courtLoadFailureShowsSafeMessageAndKeepsSelection() {
+        val source =
+            settingsActivitySource()
+        val loadBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun loadArenaCourtsForSelection()",
+                endMarker = "private fun showCourtSelectionDialog("
+            )
+
+        assertTrue(loadBody.contains("Impossibile caricare i campi Arena"))
+        assertTrue(loadBody.contains("selectCourtButton.isEnabled = true"))
+        assertFalse(loadBody.contains("arenaCourtSelectionStore.saveSelection("))
+        assertFalse(loadBody.contains("setResult("))
+        assertFalse(loadBody.contains("finish()"))
     }
 
     @Test

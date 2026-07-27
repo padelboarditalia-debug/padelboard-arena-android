@@ -37,6 +37,8 @@ import com.example.padelboardarena.arena.ArenaApiScoreSnapshotSender
 import com.example.padelboardarena.arena.ArenaAuthClient
 import com.example.padelboardarena.arena.AndroidKeystoreArenaSessionStore
 import com.example.padelboardarena.arena.ArenaBuildConfig
+import com.example.padelboardarena.arena.ArenaCourtSelection
+import com.example.padelboardarena.arena.ArenaCourtSelectionStore
 import com.example.padelboardarena.arena.ArenaLiveMatchClient
 import com.example.padelboardarena.arena.ArenaLiveMatchResponse
 import com.example.padelboardarena.arena.ArenaManualUiMessages
@@ -142,6 +144,12 @@ class MainActivity : AppCompatActivity() {
         DEFAULT_TEAM_B_LABEL
     private var liveMatchRequestInFlight = false
     private var liveMatchPollingActive = false
+    private var liveMatchClientGeneration = 0
+    private var activityVisible = false
+    private var arenaCourtSelection: ArenaCourtSelection? = null
+    private var arenaApiClient: ArenaApiClient? = null
+    private var arenaLiveMatchClient: ArenaLiveMatchClient? = null
+    private var arenaRealScoreSync: ArenaRealScoreSync? = null
 
     private val liveMatchPollingHandler =
         Handler(
@@ -226,57 +234,16 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private val arenaCourtSelectionStore by lazy {
+        ArenaCourtSelectionStore(
+            preferences
+        )
+    }
+
     private val arenaAuthClient by lazy {
         ArenaAuthClient(
             config = arenaConfig,
             sessionStore = arenaSessionStore
-        )
-    }
-
-    private val arenaApiClient by lazy {
-        ArenaApiClient(
-            config = arenaConfig,
-            tokenProvider = arenaAuthClient
-        )
-    }
-
-    private val arenaLiveMatchClient by lazy {
-        ArenaLiveMatchClient(
-            config = arenaConfig,
-            tokenProvider = arenaAuthClient
-        )
-    }
-
-    private val arenaRealScoreSync by lazy {
-        ArenaRealScoreSync(
-            snapshotFactory =
-                ArenaRealScoreSnapshotFactory(
-                    sequenceStore =
-                        SharedPreferencesArenaManualSequenceStore(
-                            preferences
-                        )
-                ),
-            sender =
-                ArenaApiScoreSnapshotSender(
-                    arenaApiClient
-                ),
-            onResult = { snapshot, result ->
-                runOnUiThread {
-                    showArenaApiDiagnostic(
-                        label = "Arena reale",
-                        snapshot = snapshot,
-                        result = result
-                    )
-                }
-            },
-            onError = { error ->
-                runOnUiThread {
-                    arenaLastCallText.text =
-                        ArenaManualUiMessages.apiFailed(
-                            error
-                        )
-                }
-            }
         )
     }
 
@@ -296,6 +263,7 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
+            reloadArenaCourtSelection()
             bootstrapArenaSession()
 
             when (
@@ -351,6 +319,7 @@ class MainActivity : AppCompatActivity() {
             )
         loadSavedData()
         updateScreen()
+        reloadArenaCourtSelection()
         startBleScanIfDevicesAssigned()
         bootstrapArenaSession()
 
@@ -362,10 +331,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        activityVisible = true
         startLiveMatchPolling()
     }
 
     override fun onStop() {
+        activityVisible = false
         stopLiveMatchPolling()
         super.onStop()
     }
@@ -439,7 +410,12 @@ class MainActivity : AppCompatActivity() {
                     ArenaSessionRestoreResult.RESTORED -> {
                         arenaConnectionStatusText.text =
                             "Arena connessa"
-                        refreshLiveMatchIfNeeded()
+                        if (arenaCourtSelection == null) {
+                            arenaLastCallText.text =
+                                "Seleziona campo Arena"
+                        } else {
+                            refreshLiveMatchIfNeeded()
+                        }
                     }
 
                     ArenaSessionRestoreResult.MISSING -> {
@@ -457,6 +433,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startLiveMatchPolling() {
+        if (arenaCourtSelection == null || arenaLiveMatchClient == null) {
+            liveMatchPollingActive = false
+            arenaLastCallText.text =
+                "Seleziona campo Arena"
+            return
+        }
+
         liveMatchPollingActive = true
         refreshLiveMatchIfNeeded()
         scheduleNextLiveMatchPoll()
@@ -487,14 +470,24 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val liveMatchClient =
+            arenaLiveMatchClient ?: return
+
+        val requestGeneration =
+            liveMatchClientGeneration
+
         if (arenaAuthClient.currentAccessToken() == null) {
             return
         }
 
         liveMatchRequestInFlight = true
 
-        arenaLiveMatchClient.fetchLiveMatch { result ->
+        liveMatchClient.fetchLiveMatch { result ->
             runOnUiThread {
+                if (requestGeneration != liveMatchClientGeneration) {
+                    return@runOnUiThread
+                }
+
                 liveMatchRequestInFlight = false
 
                 val response =
@@ -516,6 +509,119 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun reloadArenaCourtSelection() {
+        val selection =
+            arenaCourtSelectionStore.readSelection()
+                ?: fallbackArenaCourtSelection()
+
+        configureArenaCourtClients(
+            selection
+        )
+    }
+
+    private fun fallbackArenaCourtSelection(): ArenaCourtSelection? {
+        val courtId =
+            arenaConfig.courtId.trim()
+
+        if (courtId.isBlank()) {
+            return null
+        }
+
+        return ArenaCourtSelection(
+            selectedCourtId = courtId,
+            selectedCourtLabel = "Campo Arena PoC",
+            selectedCenterName = "Centro",
+            selectedTournamentCourtName = null
+        )
+    }
+
+    private fun configureArenaCourtClients(
+        selection: ArenaCourtSelection?
+    ) {
+        stopLiveMatchPolling()
+        liveMatchClientGeneration += 1
+        liveMatchRequestInFlight = false
+
+        arenaApiClient?.shutdown()
+        arenaLiveMatchClient?.shutdown()
+
+        arenaCourtSelection =
+            selection
+
+        if (selection == null) {
+            arenaApiClient = null
+            arenaLiveMatchClient = null
+            arenaRealScoreSync = null
+            updateTeamLabels(
+                DEFAULT_TEAM_A_LABEL,
+                DEFAULT_TEAM_B_LABEL
+            )
+            arenaLastCallText.text =
+                "Seleziona campo Arena"
+            return
+        }
+
+        val selectedConfig =
+            arenaConfig.copy(
+                courtId = selection.selectedCourtId
+            )
+
+        val apiClient =
+            ArenaApiClient(
+                config = selectedConfig,
+                tokenProvider = arenaAuthClient
+            )
+
+        val liveMatchClient =
+            ArenaLiveMatchClient(
+                config = selectedConfig,
+                tokenProvider = arenaAuthClient
+            )
+
+        arenaApiClient =
+            apiClient
+        arenaLiveMatchClient =
+            liveMatchClient
+        arenaRealScoreSync =
+            ArenaRealScoreSync(
+                snapshotFactory =
+                    ArenaRealScoreSnapshotFactory(
+                        sequenceStore =
+                            SharedPreferencesArenaManualSequenceStore(
+                                preferences
+                            )
+                    ),
+                sender =
+                    ArenaApiScoreSnapshotSender(
+                        apiClient
+                    ),
+                onResult = { snapshot, result ->
+                    runOnUiThread {
+                        showArenaApiDiagnostic(
+                            label = "Arena reale",
+                            snapshot = snapshot,
+                            result = result
+                        )
+                    }
+                },
+                onError = { error ->
+                    runOnUiThread {
+                        arenaLastCallText.text =
+                            ArenaManualUiMessages.apiFailed(
+                                error
+                            )
+                    }
+                }
+            )
+
+        arenaLastCallText.text =
+            "${selection.selectedCenterName} - ${selection.selectedCourtLabel}"
+
+        if (activityVisible && arenaAuthClient.currentAccessToken() != null) {
+            startLiveMatchPolling()
         }
     }
 
@@ -858,7 +964,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enqueueArenaSnapshot() {
-        arenaRealScoreSync.enqueue(
+        val sync =
+            arenaRealScoreSync
+
+        if (sync == null) {
+            arenaLastCallText.text =
+                "Seleziona campo Arena"
+            return
+        }
+
+        sync.enqueue(
             ArenaRealScoreState(
                 pointsA = displayPointForSide(
                     Side.A
@@ -2001,8 +2116,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         arenaManualExecutor.shutdownNow()
-        arenaApiClient.shutdown()
-        arenaLiveMatchClient.shutdown()
+        arenaApiClient?.shutdown()
+        arenaLiveMatchClient?.shutdown()
         scoreAnnouncer.shutdown()
 
         super.onDestroy()

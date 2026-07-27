@@ -4,107 +4,51 @@ import java.io.IOException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-data class ArenaLiveMatchSide(
-    val label: String,
-    val teamId: String?
-)
-
-data class ArenaLiveMatch(
-    val matchId: String,
-    val sideA: ArenaLiveMatchSide,
-    val sideB: ArenaLiveMatchSide,
-    val status: String?,
-    val phase: String?,
-    val scoreMode: String?
-)
-
-data class ArenaLiveMatchResponse(
+data class ArenaCourt(
     val courtId: String,
-    val arenaCourtLabel: String?,
+    val centerId: String,
+    val centerName: String,
+    val label: String,
     val tournamentCourtName: String?,
-    val match: ArenaLiveMatch?,
-    val reason: String?
-) {
-    companion object {
-        fun fromJson(
-            body: String
-        ): ArenaLiveMatchResponse {
-            require(body.jsonBoolean("ok") == true) {
-                "Live match response not ok"
-            }
+    val isActive: Boolean
+)
 
-            val matchObject =
-                body.jsonObject(
-                    "match"
-                )
-
-            return ArenaLiveMatchResponse(
-                courtId = body.jsonString("courtId").orEmpty(),
-                arenaCourtLabel = body.jsonString("arenaCourtLabel"),
-                tournamentCourtName = body.jsonString("tournamentCourtName"),
-                match = matchObject?.let { match ->
-                    ArenaLiveMatch(
-                        matchId = match.jsonString("matchId").orEmpty(),
-                        sideA = parseSide(
-                            match.jsonObject("sideA")
-                        ),
-                        sideB = parseSide(
-                            match.jsonObject("sideB")
-                        ),
-                        status = match.jsonString("status"),
-                        phase = match.jsonString("phase"),
-                        scoreMode = match.jsonString("scoreMode")
-                    )
-                },
-                reason = body.jsonString("reason")
-            )
-        }
-
-        private fun parseSide(
-            input: String?
-        ): ArenaLiveMatchSide {
-            return ArenaLiveMatchSide(
-                label = input?.jsonString("label").orEmpty(),
-                teamId = input?.jsonString("teamId")
-            )
-        }
-    }
-}
-
-data class ArenaLiveMatchResult(
+data class ArenaCourtsResult(
     val statusCode: Int,
-    val response: ArenaLiveMatchResponse?,
+    val courts: List<ArenaCourt>,
     val body: String
 ) {
     val success: Boolean =
-        statusCode in 200..299 && response != null
+        statusCode in 200..299
 
     companion object {
         fun fromHttp(
             statusCode: Int,
             body: String
-        ): ArenaLiveMatchResult {
-            val parsedResponse =
+        ): ArenaCourtsResult {
+            val parsedCourts =
                 if (statusCode in 200..299) {
                     runCatching {
-                        ArenaLiveMatchResponse.fromJson(
+                        parseArenaCourts(
                             body
                         )
-                    }.getOrNull()
+                    }.getOrElse {
+                        emptyList()
+                    }
                 } else {
-                    null
+                    emptyList()
                 }
 
-            return ArenaLiveMatchResult(
+            return ArenaCourtsResult(
                 statusCode = statusCode,
-                response = parsedResponse,
+                courts = parsedCourts,
                 body = body
             )
         }
     }
 }
 
-class ArenaLiveMatchClient(
+class ArenaCourtsClient(
     private val config: ArenaConfig,
     private val tokenProvider: ArenaTokenProvider,
     private val transport: ArenaHttpTransport =
@@ -113,17 +57,17 @@ class ArenaLiveMatchClient(
     private val executor: ExecutorService =
         Executors.newSingleThreadExecutor()
 
-    fun fetchLiveMatch(
-        callback: (ArenaLiveMatchResult) -> Unit
+    fun fetchCourts(
+        callback: (ArenaCourtsResult) -> Unit
     ) {
         executor.execute {
             try {
                 callback(
-                    fetchLiveMatchBlocking()
+                    fetchCourtsBlocking()
                 )
             } catch (error: Exception) {
                 callback(
-                    ArenaLiveMatchResult.fromHttp(
+                    ArenaCourtsResult.fromHttp(
                         statusCode = 0,
                         body = "network_error"
                     )
@@ -132,19 +76,22 @@ class ArenaLiveMatchClient(
         }
     }
 
-    fun fetchLiveMatchBlocking(): ArenaLiveMatchResult {
-        config.requireComplete()
+    fun fetchCourtsBlocking(): ArenaCourtsResult {
+        config.requireAuthComplete()
+        require(config.apiBaseUrl.isNotBlank()) {
+            "ARENA_API_BASE_URL missing"
+        }
 
         val accessToken =
             tokenProvider.currentAccessToken()
-                ?: return ArenaLiveMatchResult.fromHttp(
+                ?: return ArenaCourtsResult.fromHttp(
                     statusCode = 401,
                     body = "Missing access token"
                 )
 
         val firstResult =
             runCatching {
-                getLiveMatch(
+                getCourts(
                     accessToken = accessToken
                 )
             }.getOrElse { error ->
@@ -162,7 +109,7 @@ class ArenaLiveMatchClient(
                 ?: return firstResult
 
         return runCatching {
-            getLiveMatch(
+            getCourts(
                 accessToken = refreshedToken
             )
         }.getOrElse { error ->
@@ -172,25 +119,23 @@ class ArenaLiveMatchClient(
         }
     }
 
-    fun liveMatchUrl(): String {
+    fun courtsUrl(): String {
         return "${config.apiBaseUrl.trimEnd('/')}" +
-                "/api/arena/courts/" +
-                config.courtId.trim('/') +
-                "/live-match"
+                "/api/arena/courts"
     }
 
     fun shutdown() {
         executor.shutdownNow()
     }
 
-    private fun getLiveMatch(
+    private fun getCourts(
         accessToken: String
-    ): ArenaLiveMatchResult {
+    ): ArenaCourtsResult {
         val response =
             transport.execute(
                 ArenaHttpRequest(
                     method = "GET",
-                    url = liveMatchUrl(),
+                    url = courtsUrl(),
                     headers = mapOf(
                         "Authorization" to "Bearer $accessToken"
                     ),
@@ -198,7 +143,7 @@ class ArenaLiveMatchClient(
                 )
             )
 
-        return ArenaLiveMatchResult.fromHttp(
+        return ArenaCourtsResult.fromHttp(
             statusCode = response.statusCode,
             body = response.body
         )
@@ -207,18 +152,39 @@ class ArenaLiveMatchClient(
 
 private fun networkErrorResult(
     error: Throwable
-): ArenaLiveMatchResult {
+): ArenaCourtsResult {
     if (error is IOException) {
-        return ArenaLiveMatchResult.fromHttp(
+        return ArenaCourtsResult.fromHttp(
             statusCode = 0,
             body = "network_error"
         )
     }
 
-    return ArenaLiveMatchResult.fromHttp(
+    return ArenaCourtsResult.fromHttp(
         statusCode = 0,
         body = "network_error"
     )
+}
+
+private fun parseArenaCourts(
+    body: String
+): List<ArenaCourt> {
+    if (body.jsonBoolean("ok") != true) {
+        return emptyList()
+    }
+
+    return body.jsonArrayObjects("courts").map { court ->
+        ArenaCourt(
+            courtId = court.jsonString("courtId").orEmpty(),
+            centerId = court.jsonString("centerId").orEmpty(),
+            centerName = court.jsonString("centerName").orEmpty(),
+            label = court.jsonString("label").orEmpty(),
+            tournamentCourtName = court.jsonString("tournamentCourtName"),
+            isActive = court.jsonBoolean("isActive") == true
+        )
+    }.filter { court ->
+        court.courtId.isNotBlank()
+    }
 }
 
 private fun String.jsonBoolean(
@@ -235,20 +201,67 @@ private fun String.jsonBoolean(
         ?.toBooleanStrictOrNull()
 }
 
-private fun String.jsonObject(
+private fun String.jsonArrayObjects(
     name: String
-): String? {
+): List<String> {
     val marker =
         Regex(
-            "\"${Regex.escape(name)}\"\\s*:\\s*\\{"
-        ).find(this) ?: return null
+            "\"${Regex.escape(name)}\"\\s*:\\s*\\["
+        ).find(this) ?: return emptyList()
 
-    val objectStart =
+    val arrayStart =
         marker.range.last
+    val arrayEnd =
+        findJsonBlockEnd(
+            start = arrayStart,
+            opening = '[',
+            closing = ']'
+        ) ?: return emptyList()
 
+    return substring(
+        arrayStart + 1,
+        arrayEnd
+    ).scanJsonObjects()
+}
+
+private fun String.scanJsonObjects(): List<String> {
+    val objects =
+        mutableListOf<String>()
+    var index = 0
+
+    while (index < length) {
+        if (this[index] != '{') {
+            index += 1
+            continue
+        }
+
+        val end =
+            findJsonBlockEnd(
+                start = index,
+                opening = '{',
+                closing = '}'
+            ) ?: break
+
+        objects.add(
+            substring(
+                index,
+                end + 1
+            )
+        )
+        index = end + 1
+    }
+
+    return objects
+}
+
+private fun String.findJsonBlockEnd(
+    start: Int,
+    opening: Char,
+    closing: Char
+): Int? {
     var depth = 1
     var index =
-        objectStart + 1
+        start + 1
     var inString = false
     var escaped = false
 
@@ -269,17 +282,14 @@ private fun String.jsonObject(
             char == '"' ->
                 inString = !inString
 
-            !inString && char == '{' ->
+            !inString && char == opening ->
                 depth += 1
 
-            !inString && char == '}' -> {
+            !inString && char == closing -> {
                 depth -= 1
 
                 if (depth == 0) {
-                    return substring(
-                        objectStart,
-                        index + 1
-                    )
+                    return index
                 }
             }
         }

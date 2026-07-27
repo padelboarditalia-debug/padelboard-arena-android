@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.SocketTimeoutException
 
 class ArenaClientTest {
     @Test
@@ -288,6 +289,174 @@ class ArenaClientTest {
         assertFalse(source.contains("printStackTrace"))
     }
 
+    @Test
+    fun courtsUrlUsesConfiguredBaseUrlOnly() {
+        val client =
+            ArenaCourtsClient(
+                config = sampleConfig().copy(
+                    courtId = ""
+                ),
+                tokenProvider = StaticTokenProvider(
+                    accessToken = "access"
+                ),
+                transport = FakeTransport()
+            )
+
+        assertEquals(
+            "http://10.0.2.2:3000/api/arena/courts",
+            client.courtsUrl()
+        )
+    }
+
+    @Test
+    fun courtsClientParsesActiveInactiveAndUnmappedCourts() {
+        val result =
+            ArenaCourtsResult.fromHttp(
+                statusCode = 200,
+                body = courtsBody()
+            )
+
+        assertTrue(result.success)
+        assertEquals(3, result.courts.size)
+        assertEquals("court-1", result.courts[0].courtId)
+        assertEquals("center-1", result.courts[0].centerId)
+        assertEquals("Centro Rossi", result.courts[0].centerName)
+        assertEquals("Campo Arena 1", result.courts[0].label)
+        assertEquals("Campo 1", result.courts[0].tournamentCourtName)
+        assertTrue(result.courts[0].isActive)
+        assertNull(result.courts[1].tournamentCourtName)
+        assertFalse(result.courts[2].isActive)
+    }
+
+    @Test
+    fun courtsClientUnauthorizedRefreshesOnceAndRetriesOnce() {
+        val transport =
+            FakeTransport(
+                ArenaHttpResponse(
+                    statusCode = 401,
+                    body = "unauthorized"
+                ),
+                ArenaHttpResponse(
+                    statusCode = 200,
+                    body = courtsBody()
+                )
+            )
+
+        val tokenProvider =
+            CountingTokenProvider(
+                accessToken = "expired",
+                refreshedToken = "fresh"
+            )
+
+        val client =
+            ArenaCourtsClient(
+                config = sampleConfig(),
+                tokenProvider = tokenProvider,
+                transport = transport
+            )
+
+        val result =
+            client.fetchCourtsBlocking()
+
+        assertTrue(result.success)
+        assertEquals(1, tokenProvider.refreshCount)
+        assertEquals(2, transport.requests.size)
+        assertEquals("GET", transport.requests[0].method)
+        assertEquals("", transport.requests[0].body)
+        assertEquals(
+            "Bearer expired",
+            transport.requests[0].headers["Authorization"]
+        )
+        assertEquals(
+            "Bearer fresh",
+            transport.requests[1].headers["Authorization"]
+        )
+    }
+
+    @Test
+    fun courtsClientDoesNotLogTokensOrResponseBodies() {
+        val source =
+            java.io.File(
+                "src/main/java/com/example/padelboardarena/arena/ArenaCourtsClient.kt"
+            ).readText()
+
+        assertFalse(source.contains("Log."))
+        assertFalse(source.contains("println"))
+        assertFalse(source.contains("printStackTrace"))
+        assertFalse(source.contains("result.body"))
+    }
+
+    @Test
+    fun courtsClientTimeoutReturnsControlledError() {
+        val client =
+            ArenaCourtsClient(
+                config = sampleConfig(),
+                tokenProvider = StaticTokenProvider(
+                    accessToken = "access"
+                ),
+                transport = ThrowingTransport()
+            )
+
+        val result =
+            client.fetchCourtsBlocking()
+
+        assertFalse(result.success)
+        assertEquals(0, result.statusCode)
+        assertEquals("network_error", result.body)
+    }
+
+    @Test
+    fun courtsClientCanSucceedOnManualRetryAfterTimeout() {
+        val failedClient =
+            ArenaCourtsClient(
+                config = sampleConfig(),
+                tokenProvider = StaticTokenProvider(
+                    accessToken = "access"
+                ),
+                transport = ThrowingTransport()
+            )
+        val retryClient =
+            ArenaCourtsClient(
+                config = sampleConfig(),
+                tokenProvider = StaticTokenProvider(
+                    accessToken = "access"
+                ),
+                transport = FakeTransport(
+                    ArenaHttpResponse(
+                        statusCode = 200,
+                        body = courtsBody()
+                    )
+                )
+            )
+
+        assertFalse(
+            failedClient.fetchCourtsBlocking().success
+        )
+        assertTrue(
+            retryClient.fetchCourtsBlocking().success
+        )
+    }
+
+    @Test
+    fun liveMatchTimeoutReturnsControlledError() {
+        val client =
+            ArenaLiveMatchClient(
+                config = sampleConfig(),
+                tokenProvider = StaticTokenProvider(
+                    accessToken = "access"
+                ),
+                transport = ThrowingTransport()
+            )
+
+        val result =
+            client.fetchLiveMatchBlocking()
+
+        assertFalse(result.success)
+        assertEquals(0, result.statusCode)
+        assertEquals("network_error", result.body)
+        assertNull(result.response)
+    }
+
     private fun sampleSnapshot(): ArenaScoreSnapshot {
         return ArenaScoreSnapshot(
             eventId = "uuid",
@@ -341,6 +510,38 @@ class ArenaClientTest {
                 "\"scoreMode\":\"game\"" +
                 "}," +
                 "\"reason\":null" +
+                "}"
+    }
+
+    private fun courtsBody(): String {
+        return "{" +
+                "\"ok\":true," +
+                "\"courts\":[" +
+                "{" +
+                "\"courtId\":\"court-1\"," +
+                "\"centerId\":\"center-1\"," +
+                "\"centerName\":\"Centro Rossi\"," +
+                "\"label\":\"Campo Arena 1\"," +
+                "\"tournamentCourtName\":\"Campo 1\"," +
+                "\"isActive\":true" +
+                "}," +
+                "{" +
+                "\"courtId\":\"court-2\"," +
+                "\"centerId\":\"center-1\"," +
+                "\"centerName\":\"Centro Rossi\"," +
+                "\"label\":\"Campo Arena 2\"," +
+                "\"tournamentCourtName\":null," +
+                "\"isActive\":true" +
+                "}," +
+                "{" +
+                "\"courtId\":\"court-3\"," +
+                "\"centerId\":\"center-2\"," +
+                "\"centerName\":\"Centro Blu\"," +
+                "\"label\":\"Campo Arena 3\"," +
+                "\"tournamentCourtName\":\"Campo 3\"," +
+                "\"isActive\":false" +
+                "}" +
+                "]" +
                 "}"
     }
 }
@@ -398,5 +599,15 @@ private class CountingTokenProvider(
         refreshCount += 1
 
         return refreshedToken
+    }
+}
+
+private class ThrowingTransport : ArenaHttpTransport {
+    override fun execute(
+        request: ArenaHttpRequest
+    ): ArenaHttpResponse {
+        throw SocketTimeoutException(
+            "failed to connect"
+        )
     }
 }

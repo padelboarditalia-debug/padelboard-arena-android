@@ -452,16 +452,16 @@ class MainActivityScoreboardSourceTest {
             methodSlice(
                 source = source,
                 startMarker = "private fun refreshLiveMatchIfNeeded()",
-                endMarker = "private fun openArenaSettings()"
+                endMarker = "private fun reloadArenaCourtSelection()"
             )
 
         assertTrue(source.contains("ArenaLiveMatchClient"))
         assertTrue(source.contains("private lateinit var teamAText: TextView"))
         assertTrue(source.contains("private lateinit var teamBText: TextView"))
         assertTrue(liveMatchBody.contains("applyLiveMatchResponse"))
-        assertTrue(liveMatchBody.contains("updateTeamLabels"))
-        assertTrue(liveMatchBody.contains("teamAText.text"))
-        assertTrue(liveMatchBody.contains("teamBText.text"))
+        assertTrue(source.contains("private fun updateTeamLabels("))
+        assertTrue(source.contains("teamAText.text"))
+        assertTrue(source.contains("teamBText.text"))
         assertFalse(liveMatchBody.contains("registerPoint("))
         assertFalse(liveMatchBody.contains("undoLastAction("))
         assertFalse(liveMatchBody.contains("saveState()"))
@@ -501,7 +501,7 @@ class MainActivityScoreboardSourceTest {
         assertTrue(refreshBody.contains("return"))
         assertTrue(refreshBody.contains("liveMatchRequestInFlight = true"))
         assertTrue(refreshBody.contains("liveMatchRequestInFlight = false"))
-        assertTrue(refreshBody.contains("arenaLiveMatchClient.fetchLiveMatch"))
+        assertTrue(refreshBody.contains("liveMatchClient.fetchLiveMatch"))
     }
 
     @Test
@@ -521,7 +521,108 @@ class MainActivityScoreboardSourceTest {
         assertTrue(source.contains("stopLiveMatchPolling()"))
         assertTrue(stopBody.contains("liveMatchPollingActive = false"))
         assertTrue(stopBody.contains("removeCallbacks"))
-        assertTrue(source.contains("arenaLiveMatchClient.shutdown()"))
+        assertTrue(source.contains("arenaLiveMatchClient?.shutdown()"))
+    }
+
+    @Test
+    fun missingArenaCourtSelectionDoesNotStartPollingOrPost() {
+        val source =
+            mainActivitySource()
+        val pollingBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun startLiveMatchPolling()",
+                endMarker = "private fun stopLiveMatchPolling()"
+            )
+        val enqueueBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun enqueueArenaSnapshot()",
+                endMarker = "private fun hasAnyShellyAssociation()"
+            )
+
+        assertTrue(pollingBody.contains("arenaCourtSelection == null"))
+        assertTrue(pollingBody.contains("arenaLiveMatchClient == null"))
+        assertTrue(pollingBody.contains("liveMatchPollingActive = false"))
+        assertTrue(pollingBody.contains("Seleziona campo Arena"))
+        assertTrue(enqueueBody.contains("arenaRealScoreSync"))
+        assertTrue(enqueueBody.contains("if (sync == null)"))
+        assertTrue(enqueueBody.contains("Seleziona campo Arena"))
+    }
+
+    @Test
+    fun fallbackBuildConfigCourtIsUsedOnlyWhenSelectionStoreIsEmpty() {
+        val source =
+            mainActivitySource()
+        val reloadBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun reloadArenaCourtSelection()",
+                endMarker = "private fun applyLiveMatchResponse("
+            )
+
+        assertTrue(source.contains("ArenaCourtSelectionStore("))
+        assertTrue(reloadBody.contains("arenaCourtSelectionStore.readSelection()"))
+        assertTrue(reloadBody.contains("?: fallbackArenaCourtSelection()"))
+        assertTrue(reloadBody.contains("arenaConfig.courtId.trim()"))
+        assertTrue(reloadBody.contains("selectedCourtId = courtId"))
+    }
+
+    @Test
+    fun courtChangeRecreatesPostLiveMatchAndSyncTogether() {
+        val source =
+            mainActivitySource()
+        val configureBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun configureArenaCourtClients(",
+                endMarker = "private fun applyLiveMatchResponse("
+            )
+
+        assertTrue(configureBody.contains("stopLiveMatchPolling()"))
+        assertTrue(configureBody.contains("liveMatchClientGeneration += 1"))
+        assertTrue(configureBody.contains("arenaApiClient?.shutdown()"))
+        assertTrue(configureBody.contains("arenaLiveMatchClient?.shutdown()"))
+        assertTrue(configureBody.contains("arenaConfig.copy("))
+        assertTrue(configureBody.contains("courtId = selection.selectedCourtId"))
+        assertTrue(configureBody.contains("ArenaApiClient("))
+        assertTrue(configureBody.contains("ArenaLiveMatchClient("))
+        assertTrue(configureBody.contains("ArenaRealScoreSync("))
+        assertTrue(configureBody.contains("ArenaApiScoreSnapshotSender("))
+    }
+
+    @Test
+    fun oldLiveMatchResponsesAreIgnoredAfterCourtChange() {
+        val refreshBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun refreshLiveMatchIfNeeded()",
+                endMarker = "private fun reloadArenaCourtSelection()"
+            )
+
+        assertTrue(refreshBody.contains("val requestGeneration"))
+        assertTrue(refreshBody.contains("liveMatchClientGeneration"))
+        assertTrue(refreshBody.contains("requestGeneration != liveMatchClientGeneration"))
+        assertTrue(refreshBody.contains("return@runOnUiThread"))
+    }
+
+    @Test
+    fun courtChangeDoesNotResetScoreOrShellyAssociations() {
+        val configureBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun configureArenaCourtClients(",
+                endMarker = "private fun applyLiveMatchResponse("
+            )
+
+        assertFalse(configureBody.contains("pointsA ="))
+        assertFalse(configureBody.contains("pointsB ="))
+        assertFalse(configureBody.contains("gamesA ="))
+        assertFalse(configureBody.contains("gamesB ="))
+        assertFalse(configureBody.contains("deviceA ="))
+        assertFalse(configureBody.contains("deviceB ="))
+        assertFalse(configureBody.contains("resetMatch()"))
+        assertFalse(configureBody.contains("resetDeviceAssignments()"))
     }
 
     @Test
@@ -544,7 +645,7 @@ class MainActivityScoreboardSourceTest {
             methodSlice(
                 source = mainActivitySource(),
                 startMarker = "private fun refreshLiveMatchIfNeeded()",
-                endMarker = "private fun openArenaSettings()"
+                endMarker = "private fun reloadArenaCourtSelection()"
             )
 
         assertFalse(liveMatchBody.contains("result.body"))

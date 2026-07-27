@@ -7,6 +7,18 @@ data class ArenaConfig(
     val supabasePublishableKey: String,
     val email: String
 ) {
+    fun requireAuthComplete() {
+        require(supabaseUrl.isNotBlank()) {
+            "SUPABASE_URL missing"
+        }
+        require(supabasePublishableKey.isNotBlank()) {
+            "SUPABASE_PUBLISHABLE_KEY missing"
+        }
+        require(email.isNotBlank()) {
+            "ARENA_EMAIL missing"
+        }
+    }
+
     fun requireComplete() {
         require(apiBaseUrl.isNotBlank()) {
             "ARENA_API_BASE_URL missing"

@@ -21,7 +21,7 @@ class ArenaAuthClient(
     fun login(
         password: String
     ): ArenaAuthSession {
-        config.requireComplete()
+        config.requireAuthComplete()
 
         val response =
             transport.execute(
@@ -103,6 +103,8 @@ class ArenaAuthClient(
     private fun refreshSession(
         refreshToken: String
     ): ArenaAuthSession? {
+        config.requireAuthComplete()
+
         val response =
             transport.execute(
                 ArenaHttpRequest(

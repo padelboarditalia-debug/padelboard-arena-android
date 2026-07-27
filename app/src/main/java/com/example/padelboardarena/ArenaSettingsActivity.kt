@@ -6,10 +6,15 @@ import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.example.padelboardarena.arena.AndroidKeystoreArenaSessionStore
 import com.example.padelboardarena.arena.ArenaAuthClient
 import com.example.padelboardarena.arena.ArenaBuildConfig
+import com.example.padelboardarena.arena.ArenaCourt
+import com.example.padelboardarena.arena.ArenaCourtSelection
+import com.example.padelboardarena.arena.ArenaCourtSelectionStore
+import com.example.padelboardarena.arena.ArenaCourtsClient
 import com.example.padelboardarena.arena.ArenaManualUiMessages
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -20,6 +25,7 @@ class ArenaSettingsActivity : AppCompatActivity() {
             "com.example.padelboardarena.EXTRA_SETTINGS_REQUEST"
         const val REQUEST_ASSIGN_SIDE_A = "ASSIGN_SIDE_A"
         const val REQUEST_ASSIGN_SIDE_B = "ASSIGN_SIDE_B"
+        const val REQUEST_COURT_CHANGED = "COURT_CHANGED"
 
         private const val PREFS_NAME = "padelboard_arena"
         private const val PREF_DEVICE_A = "device_a"
@@ -31,6 +37,8 @@ class ArenaSettingsActivity : AppCompatActivity() {
     private lateinit var passwordEditText: EditText
     private lateinit var loginButton: Button
     private lateinit var statusText: TextView
+    private lateinit var courtStatusText: TextView
+    private lateinit var selectCourtButton: Button
     private lateinit var deviceAStatusText: TextView
     private lateinit var deviceBStatusText: TextView
     private lateinit var assignAButton: Button
@@ -54,6 +62,19 @@ class ArenaSettingsActivity : AppCompatActivity() {
         )
     }
 
+    private val arenaCourtsClient by lazy {
+        ArenaCourtsClient(
+            config = arenaConfig,
+            tokenProvider = arenaAuthClient
+        )
+    }
+
+    private val arenaCourtSelectionStore by lazy {
+        ArenaCourtSelectionStore(
+            this
+        )
+    }
+
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
@@ -61,10 +82,15 @@ class ArenaSettingsActivity : AppCompatActivity() {
         setContentView(R.layout.activity_arena_settings)
 
         bindViews()
+        updateCourtSelectionUi()
         updateShellyAssignmentUi()
 
         loginButton.setOnClickListener {
             runArenaLogin()
+        }
+
+        selectCourtButton.setOnClickListener {
+            loadArenaCourtsForSelection()
         }
 
         assignAButton.setOnClickListener {
@@ -94,6 +120,12 @@ class ArenaSettingsActivity : AppCompatActivity() {
         statusText =
             findViewById(R.id.arenaSettingsStatusText)
 
+        courtStatusText =
+            findViewById(R.id.arenaSettingsCourtStatusText)
+
+        selectCourtButton =
+            findViewById(R.id.arenaSettingsSelectCourtButton)
+
         deviceAStatusText =
             findViewById(R.id.arenaSettingsDeviceAStatusText)
 
@@ -108,6 +140,164 @@ class ArenaSettingsActivity : AppCompatActivity() {
 
         backButton =
             findViewById(R.id.arenaSettingsBackButton)
+    }
+
+    private fun updateCourtSelectionUi() {
+        val selection =
+            arenaCourtSelectionStore.readSelection()
+                ?: fallbackArenaCourtSelection()
+
+        courtStatusText.text =
+            if (selection == null) {
+                "Seleziona campo Arena"
+            } else {
+                buildString {
+                    append(selection.selectedCenterName)
+                    append("\n")
+                    append(selection.selectedCourtLabel)
+                    append("\n")
+
+                    val tournamentCourtName =
+                        selection.selectedTournamentCourtName
+
+                    if (tournamentCourtName.isNullOrBlank()) {
+                        append("Non collegato a un campo torneo")
+                    } else {
+                        append("Collegato a: ")
+                        append(tournamentCourtName)
+                    }
+                }
+            }
+    }
+
+    private fun fallbackArenaCourtSelection(): ArenaCourtSelection? {
+        val courtId =
+            arenaConfig.courtId.trim()
+
+        if (courtId.isBlank()) {
+            return null
+        }
+
+        return ArenaCourtSelection(
+            selectedCourtId = courtId,
+            selectedCourtLabel = "Campo Arena PoC",
+            selectedCenterName = "Centro",
+            selectedTournamentCourtName = null
+        )
+    }
+
+    private fun loadArenaCourtsForSelection() {
+        selectCourtButton.isEnabled = false
+        courtStatusText.text =
+            "Caricamento campi Arena"
+
+        executor.execute {
+            val restoreResult =
+                arenaAuthClient.restorePersistedSession()
+
+            if (arenaAuthClient.currentAccessToken() == null) {
+                runOnUiThread {
+                    statusText.text =
+                        "Login Arena richiesto"
+                    selectCourtButton.isEnabled = true
+                    updateCourtSelectionUi()
+                }
+                return@execute
+            }
+
+            val result =
+                arenaCourtsClient.fetchCourtsBlocking()
+
+            runOnUiThread {
+                selectCourtButton.isEnabled = true
+
+                if (!result.success) {
+                    courtStatusText.text =
+                        "Impossibile caricare i campi Arena"
+                    return@runOnUiThread
+                }
+
+                statusText.text =
+                    if (restoreResult.name == "RESTORED") {
+                        "Arena connessa"
+                    } else {
+                        statusText.text
+                    }
+
+                showCourtSelectionDialog(
+                    result.courts
+                )
+            }
+        }
+    }
+
+    private fun showCourtSelectionDialog(
+        courts: List<ArenaCourt>
+    ) {
+        if (courts.isEmpty()) {
+            courtStatusText.text =
+                "Nessun campo Arena disponibile"
+            return
+        }
+
+        val labels =
+            courts.map { court ->
+                formatCourtSelectionLabel(
+                    court
+                )
+            }.toTypedArray()
+
+        AlertDialog.Builder(
+            this
+        )
+            .setTitle(
+                "Seleziona campo Arena"
+            )
+            .setItems(
+                labels
+            ) { _, which ->
+                val court =
+                    courts[which]
+
+                if (!court.isActive) {
+                    courtStatusText.text =
+                        "${court.centerName}\n${court.label}\nCampo non attivo"
+                    return@setItems
+                }
+
+                arenaCourtSelectionStore.saveSelection(
+                    court
+                )
+                updateCourtSelectionUi()
+                setResult(
+                    RESULT_OK,
+                    Intent().putExtra(
+                        EXTRA_SETTINGS_REQUEST,
+                        REQUEST_COURT_CHANGED
+                    )
+                )
+            }
+            .show()
+    }
+
+    private fun formatCourtSelectionLabel(
+        court: ArenaCourt
+    ): String {
+        val mapping =
+            if (court.tournamentCourtName.isNullOrBlank()) {
+                "non pronto"
+            } else {
+                "collegato a ${court.tournamentCourtName}"
+            }
+
+        val activity =
+            if (court.isActive) {
+                ""
+            } else {
+                " - non attivo"
+            }
+
+        return "${court.centerName} - ${court.label} ($mapping)$activity"
     }
 
     private fun updateShellyAssignmentUi() {
@@ -242,6 +432,7 @@ class ArenaSettingsActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         executor.shutdownNow()
+        arenaCourtsClient.shutdown()
         super.onDestroy()
     }
 }

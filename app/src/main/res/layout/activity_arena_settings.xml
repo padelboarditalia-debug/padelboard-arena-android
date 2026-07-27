@@ -40,6 +40,31 @@
         android:paddingTop="12dp" />
 
     <TextView
+        android:id="@+id/arenaSettingsCourtTitleText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Campo associato"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:paddingTop="24dp"
+        android:paddingBottom="12dp" />
+
+    <TextView
+        android:id="@+id/arenaSettingsCourtStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Seleziona campo Arena"
+        android:textSize="15sp"
+        android:gravity="center" />
+
+    <Button
+        android:id="@+id/arenaSettingsSelectCourtButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Seleziona campo" />
+
+    <TextView
         android:id="@+id/arenaSettingsShellyTitleText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
