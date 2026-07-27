@@ -186,6 +186,92 @@ class ArenaScoreSpeechFormatterTest {
 
     @Test
 
+    fun customTeamLabelsAreUsedForVoiceAnnouncements() {
+
+        val customFormatter =
+
+            ArenaScoreSpeechFormatter(
+
+                teamALabel = "Pippo / Pluto",
+
+                teamBLabel = "Minny / Topolino"
+
+            )
+
+        val advantagePhrase =
+
+            customFormatter.formatPoint(
+
+                state = ArenaScoreSpeechState(
+
+                    pointsA = 3,
+
+                    pointsB = 3,
+
+                    gamesA = 0,
+
+                    gamesB = 0,
+
+                    advantageSide = Side.B
+
+                ),
+
+                scoringSide = Side.B,
+
+                previousGamesA = 0,
+
+                previousGamesB = 0
+
+            )
+
+        val gamePhrase =
+
+            customFormatter.formatPoint(
+
+                state = ArenaScoreSpeechState(
+
+                    pointsA = 0,
+
+                    pointsB = 0,
+
+                    gamesA = 1,
+
+                    gamesB = 0,
+
+                    advantageSide = null
+
+                ),
+
+                scoringSide = Side.A,
+
+                previousGamesA = 0,
+
+                previousGamesB = 0
+
+            )
+
+        assertEquals(
+
+            "Vantaggio Minny / Topolino",
+
+            advantagePhrase
+
+        )
+
+        assertTrue(
+
+            gamePhrase.contains(
+
+                "Game Pippo / Pluto"
+
+            )
+
+        )
+
+    }
+
+    @Test
+
     fun undoStartsWithCorrectionAndRestoredScore() {
 
         val phrase =

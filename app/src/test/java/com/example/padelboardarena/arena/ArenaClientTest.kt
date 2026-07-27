@@ -2,6 +2,7 @@ package com.example.padelboardarena.arena
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -163,6 +164,130 @@ class ArenaClientTest {
         assertEquals(1, transport.requests.size)
     }
 
+    @Test
+    fun liveMatchUrlUsesConfiguredBaseUrlAndCourtId() {
+        val client =
+            ArenaLiveMatchClient(
+                config = sampleConfig(),
+                tokenProvider = StaticTokenProvider(
+                    accessToken = "access"
+                ),
+                transport = FakeTransport()
+            )
+
+        assertEquals(
+            "http://10.0.2.2:3000/api/arena/courts/court-1/live-match",
+            client.liveMatchUrl()
+        )
+    }
+
+    @Test
+    fun liveMatchParsesPayloadWithMatch() {
+        val result =
+            ArenaLiveMatchResult.fromHttp(
+                statusCode = 200,
+                body = liveMatchBody()
+            )
+
+        val response =
+            requireNotNull(
+                result.response
+            )
+
+        assertTrue(result.success)
+        assertEquals("court-1", response.courtId)
+        assertEquals("Campo Arena 1", response.arenaCourtLabel)
+        assertEquals("Campo 1", response.tournamentCourtName)
+        assertEquals("match-1", response.match?.matchId)
+        assertEquals("Pippo / Pluto", response.match?.sideA?.label)
+        assertEquals("Minny / Topolino", response.match?.sideB?.label)
+        assertEquals("playing", response.match?.status)
+        assertEquals("Set 1", response.match?.phase)
+        assertEquals("game", response.match?.scoreMode)
+    }
+
+    @Test
+    fun liveMatchParsesNullMatchWithReason() {
+        val result =
+            ArenaLiveMatchResult.fromHttp(
+                statusCode = 200,
+                body = "{" +
+                        "\"ok\":true," +
+                        "\"courtId\":\"court-1\"," +
+                        "\"arenaCourtLabel\":\"Campo Arena 1\"," +
+                        "\"tournamentCourtName\":null," +
+                        "\"match\":null," +
+                        "\"reason\":\"no_live_match\"" +
+                        "}"
+            )
+
+        val response =
+            requireNotNull(
+                result.response
+            )
+
+        assertTrue(result.success)
+        assertNull(response.match)
+        assertEquals("no_live_match", response.reason)
+    }
+
+    @Test
+    fun liveMatchUnauthorizedRefreshesOnceAndRetriesOnce() {
+        val transport =
+            FakeTransport(
+                ArenaHttpResponse(
+                    statusCode = 401,
+                    body = "unauthorized"
+                ),
+                ArenaHttpResponse(
+                    statusCode = 200,
+                    body = liveMatchBody()
+                )
+            )
+
+        val tokenProvider =
+            CountingTokenProvider(
+                accessToken = "expired",
+                refreshedToken = "fresh"
+            )
+
+        val client =
+            ArenaLiveMatchClient(
+                config = sampleConfig(),
+                tokenProvider = tokenProvider,
+                transport = transport
+            )
+
+        val result =
+            client.fetchLiveMatchBlocking()
+
+        assertTrue(result.success)
+        assertEquals(1, tokenProvider.refreshCount)
+        assertEquals(2, transport.requests.size)
+        assertEquals("GET", transport.requests[0].method)
+        assertEquals("", transport.requests[0].body)
+        assertEquals(
+            "Bearer expired",
+            transport.requests[0].headers["Authorization"]
+        )
+        assertEquals(
+            "Bearer fresh",
+            transport.requests[1].headers["Authorization"]
+        )
+    }
+
+    @Test
+    fun liveMatchClientDoesNotLogTokensOrResponseBodies() {
+        val source =
+            java.io.File(
+                "src/main/java/com/example/padelboardarena/arena/ArenaLiveMatchClient.kt"
+            ).readText()
+
+        assertFalse(source.contains("Log."))
+        assertFalse(source.contains("println"))
+        assertFalse(source.contains("printStackTrace"))
+    }
+
     private fun sampleSnapshot(): ArenaScoreSnapshot {
         return ArenaScoreSnapshot(
             eventId = "uuid",
@@ -193,6 +318,30 @@ class ArenaClientTest {
             supabasePublishableKey = "publishable",
             email = "arena@example.com"
         )
+    }
+
+    private fun liveMatchBody(): String {
+        return "{" +
+                "\"ok\":true," +
+                "\"courtId\":\"court-1\"," +
+                "\"arenaCourtLabel\":\"Campo Arena 1\"," +
+                "\"tournamentCourtName\":\"Campo 1\"," +
+                "\"match\":{" +
+                "\"matchId\":\"match-1\"," +
+                "\"sideA\":{" +
+                "\"label\":\"Pippo / Pluto\"," +
+                "\"teamId\":\"team-a\"" +
+                "}," +
+                "\"sideB\":{" +
+                "\"label\":\"Minny / Topolino\"," +
+                "\"teamId\":\"team-b\"" +
+                "}," +
+                "\"status\":\"playing\"," +
+                "\"phase\":\"Set 1\"," +
+                "\"scoreMode\":\"game\"" +
+                "}," +
+                "\"reason\":null" +
+                "}"
     }
 }
 

@@ -18,6 +18,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
 import android.util.TypedValue
@@ -35,6 +37,8 @@ import com.example.padelboardarena.arena.ArenaApiScoreSnapshotSender
 import com.example.padelboardarena.arena.ArenaAuthClient
 import com.example.padelboardarena.arena.AndroidKeystoreArenaSessionStore
 import com.example.padelboardarena.arena.ArenaBuildConfig
+import com.example.padelboardarena.arena.ArenaLiveMatchClient
+import com.example.padelboardarena.arena.ArenaLiveMatchResponse
 import com.example.padelboardarena.arena.ArenaManualUiMessages
 import com.example.padelboardarena.arena.ArenaRealScoreSnapshotFactory
 import com.example.padelboardarena.arena.ArenaRealScoreState
@@ -101,6 +105,9 @@ class MainActivity : AppCompatActivity() {
         private const val ADV_SCORE_AUTO_MIN_SP = 96
         private const val ADV_SCORE_AUTO_MAX_SP = 220
         private const val SCORE_TEXT_AUTOSIZE_STEP_SP = 4
+        private const val LIVE_MATCH_POLLING_INTERVAL_MS = 15_000L
+        private const val DEFAULT_TEAM_A_LABEL = "Squadra A"
+        private const val DEFAULT_TEAM_B_LABEL = "Squadra B"
     }
 
     private lateinit var statusText: TextView
@@ -109,6 +116,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var scoreAText: TextView
     private lateinit var scoreBText: TextView
+    private lateinit var teamAText: TextView
+    private lateinit var teamBText: TextView
 
     private lateinit var gamesAText: TextView
     private lateinit var gamesBText: TextView
@@ -127,6 +136,25 @@ class MainActivity : AppCompatActivity() {
 
     private var scoreAnimationA: AnimatorSet? = null
     private var scoreAnimationB: AnimatorSet? = null
+    private var teamALabel =
+        DEFAULT_TEAM_A_LABEL
+    private var teamBLabel =
+        DEFAULT_TEAM_B_LABEL
+    private var liveMatchRequestInFlight = false
+    private var liveMatchPollingActive = false
+
+    private val liveMatchPollingHandler =
+        Handler(
+            Looper.getMainLooper()
+        )
+
+    private val liveMatchPollingRunnable =
+        object : Runnable {
+            override fun run() {
+                refreshLiveMatchIfNeeded()
+                scheduleNextLiveMatchPoll()
+            }
+        }
 
     private val pointFlashColor =
         Color.rgb(70, 255, 120)
@@ -207,6 +235,13 @@ class MainActivity : AppCompatActivity() {
 
     private val arenaApiClient by lazy {
         ArenaApiClient(
+            config = arenaConfig,
+            tokenProvider = arenaAuthClient
+        )
+    }
+
+    private val arenaLiveMatchClient by lazy {
+        ArenaLiveMatchClient(
             config = arenaConfig,
             tokenProvider = arenaAuthClient
         )
@@ -325,6 +360,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        startLiveMatchPolling()
+    }
+
+    override fun onStop() {
+        stopLiveMatchPolling()
+        super.onStop()
+    }
+
     private fun bindViews() {
         statusText =
             findViewById(R.id.statusText)
@@ -340,6 +385,12 @@ class MainActivity : AppCompatActivity() {
 
         scoreBText =
             findViewById(R.id.scoreBText)
+
+        teamAText =
+            findViewById(R.id.teamAText)
+
+        teamBText =
+            findViewById(R.id.teamBText)
 
         gamesAText =
             findViewById(R.id.gamesAText)
@@ -388,6 +439,7 @@ class MainActivity : AppCompatActivity() {
                     ArenaSessionRestoreResult.RESTORED -> {
                         arenaConnectionStatusText.text =
                             "Arena connessa"
+                        refreshLiveMatchIfNeeded()
                     }
 
                     ArenaSessionRestoreResult.MISSING -> {
@@ -401,6 +453,130 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun startLiveMatchPolling() {
+        liveMatchPollingActive = true
+        refreshLiveMatchIfNeeded()
+        scheduleNextLiveMatchPoll()
+    }
+
+    private fun stopLiveMatchPolling() {
+        liveMatchPollingActive = false
+        liveMatchPollingHandler.removeCallbacks(
+            liveMatchPollingRunnable
+        )
+    }
+
+    private fun scheduleNextLiveMatchPoll() {
+        liveMatchPollingHandler.removeCallbacks(
+            liveMatchPollingRunnable
+        )
+
+        if (liveMatchPollingActive) {
+            liveMatchPollingHandler.postDelayed(
+                liveMatchPollingRunnable,
+                LIVE_MATCH_POLLING_INTERVAL_MS
+            )
+        }
+    }
+
+    private fun refreshLiveMatchIfNeeded() {
+        if (liveMatchRequestInFlight) {
+            return
+        }
+
+        if (arenaAuthClient.currentAccessToken() == null) {
+            return
+        }
+
+        liveMatchRequestInFlight = true
+
+        arenaLiveMatchClient.fetchLiveMatch { result ->
+            runOnUiThread {
+                liveMatchRequestInFlight = false
+
+                val response =
+                    result.response
+
+                if (result.success && response != null) {
+                    applyLiveMatchResponse(
+                        response
+                    )
+                } else {
+                    arenaLastCallText.text =
+                        "Partita live non disponibile"
+
+                    if (BuildConfig.DEBUG) {
+                        Log.i(
+                            ARENA_LOG_TAG,
+                            "Arena live match failed: HTTP ${result.statusCode}"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun applyLiveMatchResponse(
+        response: ArenaLiveMatchResponse
+    ) {
+        val match =
+            response.match
+
+        if (match == null) {
+            updateTeamLabels(
+                DEFAULT_TEAM_A_LABEL,
+                DEFAULT_TEAM_B_LABEL
+            )
+
+            arenaLastCallText.text =
+                when (response.reason) {
+                    "court_not_mapped" ->
+                        "Campo Arena non collegato"
+
+                    else ->
+                        "Nessuna partita live"
+                }
+
+            return
+        }
+
+        updateTeamLabels(
+            match.sideA.label,
+            match.sideB.label
+        )
+
+        arenaLastCallText.text =
+            "Partita live aggiornata"
+    }
+
+    private fun updateTeamLabels(
+        sideA: String,
+        sideB: String
+    ) {
+        teamALabel =
+            sideA.trim().ifEmpty {
+                DEFAULT_TEAM_A_LABEL
+            }
+
+        teamBLabel =
+            sideB.trim().ifEmpty {
+                DEFAULT_TEAM_B_LABEL
+            }
+
+        teamAText.text =
+            teamALabel
+
+        teamBText.text =
+            teamBLabel
+
+        if (::scoreAnnouncer.isInitialized) {
+            scoreAnnouncer.updateTeamLabels(
+                teamALabel = teamALabel,
+                teamBLabel = teamBLabel
+            )
         }
     }
 
@@ -1818,12 +1994,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        stopLiveMatchPolling()
+
         if (scanning) {
             stopBleScan()
         }
 
         arenaManualExecutor.shutdownNow()
         arenaApiClient.shutdown()
+        arenaLiveMatchClient.shutdown()
         scoreAnnouncer.shutdown()
 
         super.onDestroy()

@@ -6,7 +6,7 @@ import java.util.Locale
 
 class ArenaScoreAnnouncer(
     context: Context,
-    private val formatter: ArenaScoreSpeechFormatter =
+    private var formatter: ArenaScoreSpeechFormatter =
         ArenaScoreSpeechFormatter()
 ) : TextToSpeech.OnInitListener {
     private var textToSpeech: TextToSpeech? =
@@ -80,6 +80,17 @@ class ArenaScoreAnnouncer(
                 previousGamesB = previousGamesB
             )
         )
+    }
+
+    fun updateTeamLabels(
+        teamALabel: String,
+        teamBLabel: String
+    ) {
+        formatter =
+            ArenaScoreSpeechFormatter(
+                teamALabel = teamALabel,
+                teamBLabel = teamBLabel
+            )
     }
 
     private fun speak(

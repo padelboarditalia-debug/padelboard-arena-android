@@ -217,9 +217,9 @@ class MainActivityScoreboardSourceTest {
         assertTrue(layout.contains("<ImageButton"))
         assertTrue(layout.contains("""android:src="@drawable/ic_settings"""))
         assertTrue(layout.contains("""android:contentDescription="Impostazioni Arena"""))
-        assertTrue(layout.contains("""android:layout_width="56dp"""))
-        assertTrue(layout.contains("""android:layout_height="56dp"""))
-        assertTrue(layout.contains("""android:layout_gravity="bottom|start"""))
+        assertTrue(layout.contains("""android:layout_width="64dp"""))
+        assertTrue(layout.contains("""android:layout_height="64dp"""))
+        assertTrue(layout.contains("""android:layout_gravity="bottom|end"""))
         assertFalse(layout.contains("""android:text="Impostazioni Arena"""))
         assertTrue(source.contains("openArenaSettings()"))
         assertTrue(source.contains("ArenaSettingsActivity::class.java"))
@@ -442,6 +442,115 @@ class MainActivityScoreboardSourceTest {
         assertTrue(manifest.contains("""android:screenOrientation="landscape"""))
         assertTrue(source.contains("ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE"))
         assertTrue(source.contains("WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON"))
+    }
+
+    @Test
+    fun liveMatchPollingUpdatesLabelsWithoutTouchingScoringOrSync() {
+        val source =
+            mainActivitySource()
+        val liveMatchBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun refreshLiveMatchIfNeeded()",
+                endMarker = "private fun openArenaSettings()"
+            )
+
+        assertTrue(source.contains("ArenaLiveMatchClient"))
+        assertTrue(source.contains("private lateinit var teamAText: TextView"))
+        assertTrue(source.contains("private lateinit var teamBText: TextView"))
+        assertTrue(liveMatchBody.contains("applyLiveMatchResponse"))
+        assertTrue(liveMatchBody.contains("updateTeamLabels"))
+        assertTrue(liveMatchBody.contains("teamAText.text"))
+        assertTrue(liveMatchBody.contains("teamBText.text"))
+        assertFalse(liveMatchBody.contains("registerPoint("))
+        assertFalse(liveMatchBody.contains("undoLastAction("))
+        assertFalse(liveMatchBody.contains("saveState()"))
+        assertFalse(liveMatchBody.contains("enqueueArenaSnapshot()"))
+        assertFalse(liveMatchBody.contains("ArenaRealScoreSync"))
+    }
+
+    @Test
+    fun liveMatchNullUsesFallbackLabelsAndMessage() {
+        val liveMatchBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun applyLiveMatchResponse(",
+                endMarker = "private fun updateTeamLabels("
+            )
+
+        assertTrue(liveMatchBody.contains("match == null"))
+        assertTrue(liveMatchBody.contains("DEFAULT_TEAM_A_LABEL"))
+        assertTrue(liveMatchBody.contains("DEFAULT_TEAM_B_LABEL"))
+        assertTrue(liveMatchBody.contains("Nessuna partita live"))
+        assertFalse(liveMatchBody.contains("pointsA ="))
+        assertFalse(liveMatchBody.contains("pointsB ="))
+        assertFalse(liveMatchBody.contains("gamesA ="))
+        assertFalse(liveMatchBody.contains("gamesB ="))
+    }
+
+    @Test
+    fun liveMatchPollingAvoidsOverlappingRequests() {
+        val refreshBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun refreshLiveMatchIfNeeded()",
+                endMarker = "private fun applyLiveMatchResponse("
+            )
+
+        assertTrue(refreshBody.contains("if (liveMatchRequestInFlight)"))
+        assertTrue(refreshBody.contains("return"))
+        assertTrue(refreshBody.contains("liveMatchRequestInFlight = true"))
+        assertTrue(refreshBody.contains("liveMatchRequestInFlight = false"))
+        assertTrue(refreshBody.contains("arenaLiveMatchClient.fetchLiveMatch"))
+    }
+
+    @Test
+    fun liveMatchPollingStopsWhenActivityIsNotVisible() {
+        val source =
+            mainActivitySource()
+        val stopBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun stopLiveMatchPolling()",
+                endMarker = "private fun scheduleNextLiveMatchPoll()"
+            )
+
+        assertTrue(source.contains("override fun onStart()"))
+        assertTrue(source.contains("startLiveMatchPolling()"))
+        assertTrue(source.contains("override fun onStop()"))
+        assertTrue(source.contains("stopLiveMatchPolling()"))
+        assertTrue(stopBody.contains("liveMatchPollingActive = false"))
+        assertTrue(stopBody.contains("removeCallbacks"))
+        assertTrue(source.contains("arenaLiveMatchClient.shutdown()"))
+    }
+
+    @Test
+    fun liveMatchNamesAreUsedByVoiceFormatter() {
+        val updateLabelsBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun updateTeamLabels(",
+                endMarker = "private fun openArenaSettings()"
+            )
+
+        assertTrue(updateLabelsBody.contains("scoreAnnouncer.updateTeamLabels"))
+        assertTrue(updateLabelsBody.contains("teamALabel ="))
+        assertTrue(updateLabelsBody.contains("teamBLabel ="))
+    }
+
+    @Test
+    fun liveMatchUiAndLogsDoNotExposeTokensOrBodies() {
+        val liveMatchBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun refreshLiveMatchIfNeeded()",
+                endMarker = "private fun openArenaSettings()"
+            )
+
+        assertFalse(liveMatchBody.contains("result.body"))
+        assertFalse(liveMatchBody.contains("Authorization"))
+        assertFalse(liveMatchBody.contains("Bearer"))
+        assertFalse(liveMatchBody.contains("refreshToken"))
     }
 
     private fun mainActivitySource(): String {
