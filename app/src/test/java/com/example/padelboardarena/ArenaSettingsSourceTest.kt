@@ -246,7 +246,7 @@ class ArenaSettingsSourceTest {
 
         assertTrue(
             helperBody.contains(
-                "Premi il pulsante Shelly lato \$sideName"
+                "Attendi un secondo, poi premi il pulsante Shelly lato \$sideName"
             )
         )
         assertEquals(
@@ -256,6 +256,87 @@ class ArenaSettingsSourceTest {
             ).findAll(
                 helperBody
             ).count()
+        )
+    }
+
+    @Test
+    fun assignmentArmingGuardRunsBeforeDeduplicationAndScoring() {
+        val source =
+            mainActivitySource()
+        val processBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun processScanResult(",
+                endMarker = "private fun extractShellyMac("
+            )
+        val guardIndex =
+            processBody.indexOf(
+                "System.currentTimeMillis() < assignmentArmedAt"
+            )
+        val guardStartIndex =
+            processBody.indexOf(
+                "currentAssignment != null"
+            )
+        val packetDedupIndex =
+            processBody.indexOf(
+                "lastPacketIdByDevice["
+            )
+        val fallbackDedupIndex =
+            processBody.indexOf(
+                "lastFallbackEventByDevice["
+            )
+        val dispatchIndex =
+            processBody.indexOf(
+                "handleButtonEvent("
+            )
+
+        assertTrue(guardIndex >= 0)
+        assertTrue(guardStartIndex >= 0)
+        assertTrue(guardIndex > guardStartIndex)
+        assertTrue(packetDedupIndex > guardIndex)
+        assertTrue(fallbackDedupIndex > guardIndex)
+        assertTrue(dispatchIndex > guardIndex)
+
+        val prematureGuard =
+            processBody.substring(
+                guardStartIndex,
+                packetDedupIndex
+            )
+
+        assertTrue(
+            prematureGuard.contains(
+                "currentAssignment != null"
+            )
+        )
+        assertTrue(
+            prematureGuard.contains(
+                "return"
+            )
+        )
+        assertFalse(
+            prematureGuard.contains(
+                "lastPacketIdByDevice["
+            )
+        )
+        assertFalse(
+            prematureGuard.contains(
+                "lastFallbackEventByDevice["
+            )
+        )
+        assertFalse(
+            prematureGuard.contains(
+                "assignDevice("
+            )
+        )
+        assertFalse(
+            prematureGuard.contains(
+                "registerPoint("
+            )
+        )
+        assertFalse(
+            prematureGuard.contains(
+                "arenaRealScoreSync"
+            )
         )
     }
 

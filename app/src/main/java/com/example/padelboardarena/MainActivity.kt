@@ -705,7 +705,7 @@ class MainActivity : AppCompatActivity() {
             }
 
         helpText.text =
-            "Premi il pulsante Shelly lato $sideName"
+            "Attendi un secondo, poi premi il pulsante Shelly lato $sideName"
 
         beginAssignment(
             mode
@@ -1225,6 +1225,16 @@ class MainActivity : AppCompatActivity() {
         val buttonEvent =
             parsedPacket.buttonEvent
                 ?: return
+
+        val currentAssignment =
+            assignmentMode
+
+        if (
+            currentAssignment != null &&
+            System.currentTimeMillis() < assignmentArmedAt
+        ) {
+            return
+        }
 
         /*
          * Deduplicazione principale tramite packet ID.
