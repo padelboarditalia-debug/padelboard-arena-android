@@ -207,7 +207,7 @@ class ArenaManualFeatureTest {
 
         assertTrue(error != null)
         assertEquals(
-            "Login Arena richiesto",
+            "Login Arena fallito: credenziali non valide",
             ArenaManualUiMessages.loginFailed(
                 error!!
             )

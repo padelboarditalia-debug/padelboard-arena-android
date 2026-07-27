@@ -4,7 +4,51 @@ object ArenaManualUiMessages {
     fun loginFailed(
         error: Throwable
     ): String {
-        return "Login Arena richiesto"
+        return "Login Arena fallito: ${safeLoginFailureCause(error)}"
+    }
+
+    fun safeLoginFailureCause(
+        error: Throwable
+    ): String {
+        val message =
+            error.message.orEmpty()
+
+        return when {
+            message.contains(
+                "HTTP 400"
+            ) ||
+                    message.contains(
+                        "HTTP 401"
+                    ) ->
+                "credenziali non valide"
+
+            error is java.io.IOException ->
+                "rete non disponibile"
+
+            message.contains(
+                "missing",
+                ignoreCase = true
+            ) ->
+                if (
+                    message.contains(
+                        "JSON",
+                        ignoreCase = true
+                    )
+                ) {
+                    "risposta non valida"
+                } else {
+                    "configurazione mancante"
+                }
+
+            message.contains(
+                "JSON",
+                ignoreCase = true
+            ) ->
+                "risposta non valida"
+
+            else ->
+                "errore sconosciuto"
+        }
     }
 
     fun apiResult(

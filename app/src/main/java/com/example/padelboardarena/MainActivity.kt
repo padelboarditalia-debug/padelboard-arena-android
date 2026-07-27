@@ -1,6 +1,10 @@
 package com.example.padelboardarena
 
 import android.Manifest
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
@@ -9,12 +13,17 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.graphics.Color
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.util.Log
+import android.util.TypedValue
+import android.view.WindowManager
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -77,6 +86,21 @@ class MainActivity : AppCompatActivity() {
 
         private const val ARENA_LOG_TAG =
             "PadelBoardArena"
+
+        private const val SCORE_FLASH_DURATION_MS = 5_000L
+        private const val SCORE_FLASH_PULSE_COUNT = 5
+        private const val SCORE_FLASH_RISE_MS = 350L
+        private const val SCORE_FLASH_HOLD_MS = 200L
+        private const val SCORE_FLASH_FALL_MS = 350L
+        private const val SCORE_FLASH_PAUSE_MS = 100L
+
+        private const val NUMERIC_SCORE_TEXT_SIZE_SP = 320
+        private const val NUMERIC_SCORE_AUTO_MIN_SP = 140
+        private const val NUMERIC_SCORE_AUTO_MAX_SP = 380
+        private const val ADV_SCORE_TEXT_SIZE_SP = 200
+        private const val ADV_SCORE_AUTO_MIN_SP = 96
+        private const val ADV_SCORE_AUTO_MAX_SP = 220
+        private const val SCORE_TEXT_AUTOSIZE_STEP_SP = 4
     }
 
     private lateinit var statusText: TextView
@@ -88,18 +112,26 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var gamesAText: TextView
     private lateinit var gamesBText: TextView
+    private lateinit var setsAText: TextView
+    private lateinit var setsBText: TextView
 
     private lateinit var deviceAText: TextView
     private lateinit var deviceBText: TextView
 
     private lateinit var startButton: Button
-    private lateinit var assignAButton: Button
-    private lateinit var assignBButton: Button
-    private lateinit var resetScoreButton: Button
-    private lateinit var resetDevicesButton: Button
-    private lateinit var arenaSettingsButton: Button
+    private lateinit var arenaSettingsButton: ImageButton
+    private lateinit var helpText: TextView
     private lateinit var arenaConnectionStatusText: TextView
     private lateinit var arenaLastCallText: TextView
+    private lateinit var scoreAnnouncer: ArenaScoreAnnouncer
+
+    private var scoreAnimationA: AnimatorSet? = null
+    private var scoreAnimationB: AnimatorSet? = null
+
+    private val pointFlashColor =
+        Color.rgb(70, 255, 120)
+    private val undoFlashColor =
+        Color.rgb(255, 80, 80)
 
     private var scanning = false
 
@@ -228,8 +260,24 @@ class MainActivity : AppCompatActivity() {
     private val arenaSettingsLauncher =
         registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
-        ) {
+        ) { result ->
             bootstrapArenaSession()
+
+            when (
+                result.data?.getStringExtra(
+                    ArenaSettingsActivity.EXTRA_SETTINGS_REQUEST
+                )
+            ) {
+                ArenaSettingsActivity.REQUEST_ASSIGN_SIDE_A ->
+                    requestShellyAssignment(
+                        AssignmentMode.SIDE_A
+                    )
+
+                ArenaSettingsActivity.REQUEST_ASSIGN_SIDE_B ->
+                    requestShellyAssignment(
+                        AssignmentMode.SIDE_B
+                    )
+            }
         }
 
     private val permissionLauncher =
@@ -254,41 +302,23 @@ class MainActivity : AppCompatActivity() {
         savedInstanceState: Bundle?
     ) {
         super.onCreate(savedInstanceState)
+        requestedOrientation =
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
         setContentView(R.layout.activity_main)
 
         bindViews()
+        scoreAnnouncer =
+            ArenaScoreAnnouncer(
+                this
+            )
         loadSavedData()
         updateScreen()
         startBleScanIfDevicesAssigned()
         bootstrapArenaSession()
 
-        startButton.setOnClickListener {
-            if (scanning) {
-                stopBleScan()
-            } else {
-                checkPermissionsAndStart()
-            }
-        }
-
-        assignAButton.setOnClickListener {
-            beginAssignment(
-                AssignmentMode.SIDE_A
-            )
-        }
-
-        assignBButton.setOnClickListener {
-            beginAssignment(
-                AssignmentMode.SIDE_B
-            )
-        }
-
-        resetScoreButton.setOnClickListener {
-            resetMatch()
-        }
-
-        resetDevicesButton.setOnClickListener {
-            resetDeviceAssignments()
-        }
 
         arenaSettingsButton.setOnClickListener {
             openArenaSettings()
@@ -317,6 +347,12 @@ class MainActivity : AppCompatActivity() {
         gamesBText =
             findViewById(R.id.gamesBText)
 
+        setsAText =
+            findViewById(R.id.setsAText)
+
+        setsBText =
+            findViewById(R.id.setsBText)
+
         deviceAText =
             findViewById(R.id.deviceAText)
 
@@ -326,20 +362,11 @@ class MainActivity : AppCompatActivity() {
         startButton =
             findViewById(R.id.startButton)
 
-        assignAButton =
-            findViewById(R.id.assignAButton)
-
-        assignBButton =
-            findViewById(R.id.assignBButton)
-
-        resetScoreButton =
-            findViewById(R.id.resetScoreButton)
-
-        resetDevicesButton =
-            findViewById(R.id.resetDevicesButton)
-
         arenaSettingsButton =
             findViewById(R.id.arenaSettingsButton)
+
+        helpText =
+            findViewById(R.id.helpText)
 
         arenaConnectionStatusText =
             findViewById(R.id.arenaConnectionStatusText)
@@ -383,6 +410,23 @@ class MainActivity : AppCompatActivity() {
                 this,
                 ArenaSettingsActivity::class.java
             )
+        )
+    }
+
+    private fun requestShellyAssignment(
+        mode: AssignmentMode
+    ) {
+        val sideName =
+            when (mode) {
+                AssignmentMode.SIDE_A -> "A"
+                AssignmentMode.SIDE_B -> "B"
+            }
+
+        helpText.text =
+            "Premi il pulsante Shelly lato $sideName"
+
+        beginAssignment(
+            mode
         )
     }
 
@@ -499,21 +543,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateScreen() {
-        scoreAText.text =
+        val displayedScoreA =
             displayPointForSide(
                 Side.A
             )
 
-        scoreBText.text =
+        val displayedScoreB =
             displayPointForSide(
                 Side.B
             )
+
+        scoreAText.text =
+            displayedScoreA
+        applyScoreTextSizing(
+            textView = scoreAText,
+            displayedValue = displayedScoreA
+        )
+
+        scoreBText.text =
+            displayedScoreB
+        applyScoreTextSizing(
+            textView = scoreBText,
+            displayedValue = displayedScoreB
+        )
 
         gamesAText.text =
             gamesA.toString()
 
         gamesBText.text =
             gamesB.toString()
+
+        setsAText.text =
+            "0"
+
+        setsBText.text =
+            "0"
 
         deviceAText.text =
             deviceA?.let { identifier ->
@@ -543,6 +607,47 @@ class MainActivity : AppCompatActivity() {
                 else ->
                     "Game in corso"
             }
+    }
+
+    private fun applyScoreTextSizing(
+        textView: TextView,
+        displayedValue: String
+    ) {
+        val isAdvantage =
+            displayedValue == "ADV"
+
+        val minTextSize =
+            if (isAdvantage) {
+                ADV_SCORE_AUTO_MIN_SP
+            } else {
+                NUMERIC_SCORE_AUTO_MIN_SP
+            }
+
+        val maxTextSize =
+            if (isAdvantage) {
+                ADV_SCORE_AUTO_MAX_SP
+            } else {
+                NUMERIC_SCORE_AUTO_MAX_SP
+            }
+
+        val textSize =
+            if (isAdvantage) {
+                ADV_SCORE_TEXT_SIZE_SP
+            } else {
+                NUMERIC_SCORE_TEXT_SIZE_SP
+            }
+
+        textView.setAutoSizeTextTypeUniformWithConfiguration(
+            minTextSize,
+            maxTextSize,
+            SCORE_TEXT_AUTOSIZE_STEP_SP,
+            TypedValue.COMPLEX_UNIT_SP
+        )
+
+        textView.setTextSize(
+            TypedValue.COMPLEX_UNIT_SP,
+            textSize.toFloat()
+        )
     }
 
     private fun displayPointForSide(
@@ -1238,6 +1343,9 @@ class MainActivity : AppCompatActivity() {
         eventText.text =
             "Dispositivo: $deviceIdentifier"
 
+        helpText.text =
+            "Tap: +1 punto    Doppio tap: annulla"
+
         saveState()
         updateScreen()
 
@@ -1248,10 +1356,137 @@ class MainActivity : AppCompatActivity() {
         ).show()
     }
 
+    private fun animatePointChange(
+        side: Side
+    ) {
+        animateScoreChange(
+            side = side,
+            flashColor = pointFlashColor
+        )
+    }
+
+    private fun animateUndoChange(
+        side: Side
+    ) {
+        animateScoreChange(
+            side = side,
+            flashColor = undoFlashColor
+        )
+    }
+
+    private fun animateScoreChange(
+        side: Side,
+        flashColor: Int
+    ) {
+        val target =
+            when (side) {
+                Side.A -> scoreAText
+                Side.B -> scoreBText
+            }
+
+        val previousAnimation =
+            when (side) {
+                Side.A -> scoreAnimationA
+                Side.B -> scoreAnimationB
+            }
+
+        previousAnimation?.cancel()
+        target.setTextColor(
+            Color.WHITE
+        )
+
+        val pulseAnimations =
+            mutableListOf<Animator>()
+
+        repeat(SCORE_FLASH_PULSE_COUNT) {
+            pulseAnimations.add(
+                ObjectAnimator.ofArgb(
+                    target,
+                    "textColor",
+                    Color.WHITE,
+                    flashColor
+                ).apply {
+                    duration = SCORE_FLASH_RISE_MS
+                }
+            )
+            pulseAnimations.add(
+                ObjectAnimator.ofArgb(
+                    target,
+                    "textColor",
+                    flashColor,
+                    flashColor
+                ).apply {
+                    duration = SCORE_FLASH_HOLD_MS
+                }
+            )
+            pulseAnimations.add(
+                ObjectAnimator.ofArgb(
+                    target,
+                    "textColor",
+                    flashColor,
+                    Color.WHITE
+                ).apply {
+                    duration = SCORE_FLASH_FALL_MS
+                }
+            )
+            pulseAnimations.add(
+                ObjectAnimator.ofArgb(
+                    target,
+                    "textColor",
+                    Color.WHITE,
+                    Color.WHITE
+                ).apply {
+                    duration = SCORE_FLASH_PAUSE_MS
+                }
+            )
+        }
+
+        val animation =
+            AnimatorSet().apply {
+                playSequentially(
+                    pulseAnimations
+                )
+                addListener(
+                    object : AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(
+                            animation: Animator
+                        ) {
+                            target.setTextColor(
+                                Color.WHITE
+                            )
+                        }
+
+                        override fun onAnimationCancel(
+                            animation: Animator
+                        ) {
+                            target.setTextColor(
+                                Color.WHITE
+                            )
+                        }
+                    }
+                )
+            }
+
+        when (side) {
+            Side.A -> scoreAnimationA = animation
+            Side.B -> scoreAnimationB = animation
+        }
+
+        animation.start()
+    }
+
     private fun registerPoint(
         scoringSide: Side
     ) {
-        saveSnapshot()
+        saveSnapshot(
+            scoringSide
+        )
+
+        val previousGamesA =
+            gamesA
+
+        val previousGamesB =
+            gamesB
 
         /*
          * KILLER:
@@ -1267,6 +1502,14 @@ class MainActivity : AppCompatActivity() {
                 "Punto killer"
 
             saveStateUpdateScreenAndEnqueueArenaSnapshot()
+            animatePointChange(
+                scoringSide
+            )
+            announceValidPoint(
+                scoringSide = scoringSide,
+                previousGamesA = previousGamesA,
+                previousGamesB = previousGamesB
+            )
             return
         }
 
@@ -1303,6 +1546,14 @@ class MainActivity : AppCompatActivity() {
             }
 
             saveStateUpdateScreenAndEnqueueArenaSnapshot()
+            animatePointChange(
+                scoringSide
+            )
+            announceValidPoint(
+                scoringSide = scoringSide,
+                previousGamesA = previousGamesA,
+                previousGamesB = previousGamesB
+            )
             return
         }
 
@@ -1335,6 +1586,14 @@ class MainActivity : AppCompatActivity() {
                 "Punto di vantaggio"
 
             saveStateUpdateScreenAndEnqueueArenaSnapshot()
+            animatePointChange(
+                scoringSide
+            )
+            announceValidPoint(
+                scoringSide = scoringSide,
+                previousGamesA = previousGamesA,
+                previousGamesB = previousGamesB
+            )
             return
         }
 
@@ -1355,6 +1614,14 @@ class MainActivity : AppCompatActivity() {
                 "Game vinto"
 
             saveStateUpdateScreenAndEnqueueArenaSnapshot()
+            animatePointChange(
+                scoringSide
+            )
+            announceValidPoint(
+                scoringSide = scoringSide,
+                previousGamesA = previousGamesA,
+                previousGamesB = previousGamesB
+            )
             return
         }
 
@@ -1377,6 +1644,48 @@ class MainActivity : AppCompatActivity() {
             "Pressione singola"
 
         saveStateUpdateScreenAndEnqueueArenaSnapshot()
+        animatePointChange(
+            scoringSide
+        )
+        announceValidPoint(
+            scoringSide = scoringSide,
+            previousGamesA = previousGamesA,
+            previousGamesB = previousGamesB
+        )
+    }
+
+    private fun announceValidPoint(
+        scoringSide: Side,
+        previousGamesA: Int,
+        previousGamesB: Int
+    ) {
+        scoreAnnouncer.announcePoint(
+            state = currentSpeechState(),
+            scoringSide = scoringSide,
+            previousGamesA = previousGamesA,
+            previousGamesB = previousGamesB
+        )
+    }
+
+    private fun announceValidUndo(
+        previousGamesA: Int,
+        previousGamesB: Int
+    ) {
+        scoreAnnouncer.announceUndo(
+            state = currentSpeechState(),
+            previousGamesA = previousGamesA,
+            previousGamesB = previousGamesB
+        )
+    }
+
+    private fun currentSpeechState(): ArenaScoreSpeechState {
+        return ArenaScoreSpeechState(
+            pointsA = pointsA,
+            pointsB = pointsB,
+            gamesA = gamesA,
+            gamesB = gamesB,
+            advantageSide = advantageSide
+        )
     }
 
     private fun winGame(
@@ -1397,7 +1706,9 @@ class MainActivity : AppCompatActivity() {
         killerMode = false
     }
 
-    private fun saveSnapshot() {
+    private fun saveSnapshot(
+        scoringSide: Side
+    ) {
         scoreHistory.add(
             ScoreSnapshot(
                 pointsA = pointsA,
@@ -1405,7 +1716,8 @@ class MainActivity : AppCompatActivity() {
                 gamesA = gamesA,
                 gamesB = gamesB,
                 advantageSide = advantageSide,
-                killerMode = killerMode
+                killerMode = killerMode,
+                scoringSide = scoringSide
             )
         )
     }
@@ -1423,6 +1735,12 @@ class MainActivity : AppCompatActivity() {
 
             return
         }
+
+        val previousGamesA =
+            gamesA
+
+        val previousGamesB =
+            gamesB
 
         pointsA =
             snapshot.pointsA
@@ -1449,6 +1767,13 @@ class MainActivity : AppCompatActivity() {
             "Doppia pressione"
 
         saveStateUpdateScreenAndEnqueueArenaSnapshot()
+        animateUndoChange(
+            snapshot.scoringSide
+        )
+        announceValidUndo(
+            previousGamesA = previousGamesA,
+            previousGamesB = previousGamesB
+        )
     }
 
     private fun resetMatch() {
@@ -1499,6 +1824,7 @@ class MainActivity : AppCompatActivity() {
 
         arenaManualExecutor.shutdownNow()
         arenaApiClient.shutdown()
+        scoreAnnouncer.shutdown()
 
         super.onDestroy()
     }
@@ -1530,7 +1856,8 @@ data class ScoreSnapshot(
     val gamesA: Int,
     val gamesB: Int,
     val advantageSide: Side?,
-    val killerMode: Boolean
+    val killerMode: Boolean,
+    val scoringSide: Side
 )
 
 enum class ButtonEvent(

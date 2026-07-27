@@ -39,6 +39,44 @@
         android:gravity="center"
         android:paddingTop="12dp" />
 
+    <TextView
+        android:id="@+id/arenaSettingsShellyTitleText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pulsanti Shelly"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:paddingTop="24dp"
+        android:paddingBottom="12dp" />
+
+    <TextView
+        android:id="@+id/arenaSettingsDeviceAStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pulsante A: non associato"
+        android:textSize="15sp" />
+
+    <Button
+        android:id="@+id/arenaSettingsAssignAButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Associa pulsante A" />
+
+    <TextView
+        android:id="@+id/arenaSettingsDeviceBStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pulsante B: non associato"
+        android:textSize="15sp"
+        android:paddingTop="12dp" />
+
+    <Button
+        android:id="@+id/arenaSettingsAssignBButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Associa pulsante B" />
+
     <Button
         android:id="@+id/arenaSettingsBackButton"
         android:layout_width="match_parent"
