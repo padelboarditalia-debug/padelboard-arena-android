@@ -44,6 +44,8 @@ import com.example.padelboardarena.arena.ArenaLiveMatchClient
 import com.example.padelboardarena.arena.ArenaLiveMatchResponse
 import com.example.padelboardarena.arena.ArenaLiveScoreAdoptionClient
 import com.example.padelboardarena.arena.ArenaLiveScoreAdoptionRequest
+import com.example.padelboardarena.arena.ArenaLastClosedMatch
+import com.example.padelboardarena.arena.ArenaLastClosedMatchStore
 import com.example.padelboardarena.arena.SharedPreferencesArenaLifecycleSequenceStore
 import com.example.padelboardarena.arena.ArenaManualUiMessages
 import com.example.padelboardarena.arena.ArenaMatchLifecycleClient
@@ -57,6 +59,7 @@ import com.example.padelboardarena.arena.ArenaRealScoreSync
 import com.example.padelboardarena.arena.ArenaScoreSnapshot
 import com.example.padelboardarena.arena.ArenaSessionRestoreResult
 import com.example.padelboardarena.arena.SharedPreferencesArenaManualSequenceStore
+import java.time.Instant
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.UUID
@@ -196,6 +199,7 @@ class MainActivity : AppCompatActivity() {
     private var lastFinishedSnapshot: ScoreSnapshot? = null
     private var lastFinishEventId: String? = null
     private var lastFinishEventSequence: Int = 0
+    private var reopenedClosedMatchForCorrection = false
 
     private val liveMatchPollingHandler =
         Handler(
@@ -311,6 +315,12 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private val lastClosedMatchStore by lazy {
+        ArenaLastClosedMatchStore(
+            preferences
+        )
+    }
+
     private val arenaAuthClient by lazy {
         ArenaAuthClient(
             config = arenaConfig,
@@ -366,6 +376,9 @@ class MainActivity : AppCompatActivity() {
                         bootstrapArenaSession()
                         refreshLiveMatchIfNeeded()
                     }
+
+                ArenaSettingsActivity.REQUEST_REOPEN_LAST_FINISHED_MATCH ->
+                    reopenLastClosedMatchForCorrection()
 
                 else -> {
                     reloadArenaCourtSelection()
@@ -847,8 +860,20 @@ class MainActivity : AppCompatActivity() {
         val matchChanged =
             previousLiveMatchId != null &&
                     previousLiveMatchId != match.matchId
+        val replacesFinishedMatch =
+            matchLifecycleState == MatchLifecycleState.FINISHED_BY_ARENA &&
+                    lastFinishedMatchId != null &&
+                    lastFinishedMatchId != match.matchId
+
+        if (matchChanged || replacesFinishedMatch) {
+            activateNewLiveMatch(
+                match.matchId
+            )
+        }
+
         val shouldBootstrapScore =
             matchChanged ||
+                    replacesFinishedMatch ||
                     isLocalScoreEmptyForLiveMatchBootstrap()
 
         currentLiveMatchId =
@@ -875,6 +900,21 @@ class MainActivity : AppCompatActivity() {
 
         arenaLastCallText.text =
             "Partita live aggiornata"
+    }
+
+    private fun activateNewLiveMatch(
+        matchId: String
+    ) {
+        if (
+            currentLiveMatchId == matchId &&
+            matchLifecycleState == MatchLifecycleState.ACTIVE
+        ) {
+            return
+        }
+
+        clearMatchLifecycleState()
+        localMatchFinished = false
+        scoreHistory.clear()
     }
 
     private fun updateTeamLabels(
@@ -3283,6 +3323,33 @@ class MainActivity : AppCompatActivity() {
                         finishEventId
                     lastFinishEventSequence =
                         finishEventSequence
+                    lastClosedMatchStore.save(
+                        ArenaLastClosedMatch(
+                            matchId = resolvedMatchId,
+                            courtId = selection.selectedCourtId,
+                            teamLabelA = teamALabel,
+                            teamLabelB = teamBLabel,
+                            pointsA = finishedSnapshot.pointsA,
+                            pointsB = finishedSnapshot.pointsB,
+                            gamesA = finishedSnapshot.gamesA,
+                            gamesB = finishedSnapshot.gamesB,
+                            setsA = finishedSnapshot.setsA,
+                            setsB = finishedSnapshot.setsB,
+                            advantageSide =
+                                finishedSnapshot.advantageSide?.name,
+                            killerMode = finishedSnapshot.killerMode,
+                            tieBreakActive =
+                                finishedSnapshot.tieBreakActive,
+                            tieBreakPointsA =
+                                finishedSnapshot.tieBreakPointsA,
+                            tieBreakPointsB =
+                                finishedSnapshot.tieBreakPointsB,
+                            finishEventId = finishEventId,
+                            finishEventSequence = finishEventSequence,
+                            finishedAt = Instant.now().toString(),
+                            reopenAvailable = true
+                        )
+                    )
                     matchLifecycleState =
                         MatchLifecycleState.FINISHED_BY_ARENA
 
@@ -3297,6 +3364,12 @@ class MainActivity : AppCompatActivity() {
                     scoreAnnouncer.announceMessage(
                         "Partita conclusa"
                     )
+                    if (reopenedClosedMatchForCorrection) {
+                        reopenedClosedMatchForCorrection = false
+                        if (activityVisible) {
+                            startLiveMatchPolling()
+                        }
+                    }
                     return@runOnUiThread
                 }
 
@@ -3406,6 +3479,180 @@ class MainActivity : AppCompatActivity() {
                     "Partita conclusa"
             }
         }
+    }
+
+    private fun reopenLastClosedMatchForCorrection() {
+        val lifecycleClient =
+            arenaMatchLifecycleClient
+
+        val selection =
+            arenaCourtSelection
+
+        val lastClosedMatch =
+            lastClosedMatchStore.read()
+
+        if (
+            standaloneClassicMode ||
+            lifecycleClient == null ||
+            selection == null ||
+            lastClosedMatch == null ||
+            selection.selectedCourtId != lastClosedMatch.courtId
+        ) {
+            statusText.text =
+                "Riapertura partita fallita"
+
+            eventText.text =
+                "Ultimo match non disponibile"
+            return
+        }
+
+        if (
+            matchLifecycleState == MatchLifecycleState.FINISHING ||
+            matchLifecycleState == MatchLifecycleState.REOPENING
+        ) {
+            statusText.text =
+                "Operazione in corso"
+
+            eventText.text =
+                "Attendi il completamento"
+            return
+        }
+
+        val suspendedCurrentMatch =
+            captureSuspendedCurrentMatch()
+        val reopenEventId =
+            UUID.randomUUID().toString()
+        val reopenEventSequence =
+            arenaLifecycleSequenceStore.nextSequence()
+        val reopenRequest =
+            ArenaMatchReopenRequest(
+                eventId = reopenEventId,
+                eventSequence = reopenEventSequence,
+                matchId = lastClosedMatch.matchId
+            )
+
+        stopLiveMatchPolling()
+        matchLifecycleState =
+            MatchLifecycleState.REOPENING
+        statusText.text =
+            "Riapertura partita..."
+        eventText.text =
+            "Correzione ultimo match"
+        saveMatchLifecycleState()
+        updateScreen()
+
+        lifecycleClient.reopenMatch(
+            reopenRequest
+        ) { result ->
+            runOnUiThread {
+                logArenaLifecycleResult(
+                    operation = "reopen-last-closed",
+                    result = result,
+                    eventId = reopenRequest.eventId,
+                    eventSequence = reopenRequest.eventSequence,
+                    matchId = reopenRequest.matchId,
+                    gamesA = lastClosedMatch.gamesA,
+                    gamesB = lastClosedMatch.gamesB,
+                    setsA = lastClosedMatch.setsA,
+                    setsB = lastClosedMatch.setsB
+                )
+
+                if (isReopenSuccess(result.status)) {
+                    currentLiveMatchId =
+                        lastClosedMatch.matchId
+                    updateTeamLabels(
+                        lastClosedMatch.teamLabelA,
+                        lastClosedMatch.teamLabelB
+                    )
+                    restoreScoreSnapshot(
+                        lastClosedMatch.toScoreSnapshot()
+                    )
+                    scoreHistory.clear()
+                    clearMatchLifecycleState()
+                    lastClosedMatchStore.markReopenUnavailable()
+                    reopenedClosedMatchForCorrection = true
+                    saveState()
+                    updateScreen()
+
+                    statusText.text =
+                        "Partita riaperta per correzione"
+                    eventText.text =
+                        "Undo normale attivo"
+                    scoreAnnouncer.announceMessage(
+                        "Partita riaperta"
+                    )
+                    return@runOnUiThread
+                }
+
+                restoreSuspendedCurrentMatch(
+                    suspendedCurrentMatch
+                )
+                saveState()
+                updateScreen()
+                statusText.text =
+                    "Riapertura partita fallita"
+                eventText.text =
+                    "Match corrente mantenuto"
+
+                if (activityVisible) {
+                    startLiveMatchPolling()
+                }
+            }
+        }
+    }
+
+    private fun captureSuspendedCurrentMatch(): SuspendedCurrentMatch {
+        return SuspendedCurrentMatch(
+            currentLiveMatchId = currentLiveMatchId,
+            teamLabelA = teamALabel,
+            teamLabelB = teamBLabel,
+            snapshot = captureCurrentScoreSnapshot(),
+            matchLifecycleState = matchLifecycleState,
+            scoreHistory = scoreHistory.toList()
+        )
+    }
+
+    private fun restoreSuspendedCurrentMatch(
+        suspendedCurrentMatch: SuspendedCurrentMatch
+    ) {
+        currentLiveMatchId =
+            suspendedCurrentMatch.currentLiveMatchId
+        updateTeamLabels(
+            suspendedCurrentMatch.teamLabelA,
+            suspendedCurrentMatch.teamLabelB
+        )
+        restoreScoreSnapshot(
+            suspendedCurrentMatch.snapshot
+        )
+        matchLifecycleState =
+            suspendedCurrentMatch.matchLifecycleState
+        scoreHistory.clear()
+        scoreHistory.addAll(
+            suspendedCurrentMatch.scoreHistory
+        )
+    }
+
+    private fun ArenaLastClosedMatch.toScoreSnapshot(): ScoreSnapshot {
+        return ScoreSnapshot(
+            pointsA = pointsA,
+            pointsB = pointsB,
+            gamesA = gamesA,
+            gamesB = gamesB,
+            setsA = setsA,
+            setsB = setsB,
+            advantageSide =
+                when (advantageSide) {
+                    Side.A.name -> Side.A
+                    Side.B.name -> Side.B
+                    else -> null
+                },
+            killerMode = killerMode,
+            tieBreakActive = tieBreakActive,
+            tieBreakPointsA = tieBreakPointsA,
+            tieBreakPointsB = tieBreakPointsB,
+            localMatchFinished = false,
+            scoringSide = Side.A
+        )
     }
 
     private fun logArenaLifecycleResult(
@@ -3665,6 +3912,15 @@ data class ScoreSnapshot(
     val tieBreakPointsB: Int,
     val localMatchFinished: Boolean,
     val scoringSide: Side
+)
+
+data class SuspendedCurrentMatch(
+    val currentLiveMatchId: String?,
+    val teamLabelA: String,
+    val teamLabelB: String,
+    val snapshot: ScoreSnapshot,
+    val matchLifecycleState: MatchLifecycleState,
+    val scoreHistory: List<ScoreSnapshot>
 )
 
 enum class ButtonEvent(

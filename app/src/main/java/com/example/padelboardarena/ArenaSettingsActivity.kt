@@ -16,6 +16,7 @@ import com.example.padelboardarena.arena.ArenaCourt
 import com.example.padelboardarena.arena.ArenaCourtSelection
 import com.example.padelboardarena.arena.ArenaCourtSelectionStore
 import com.example.padelboardarena.arena.ArenaCourtsClient
+import com.example.padelboardarena.arena.ArenaLastClosedMatchStore
 import com.example.padelboardarena.arena.ArenaManualUiMessages
 import com.example.padelboardarena.arena.ArenaOperationModeStore
 import java.util.concurrent.ExecutorService
@@ -30,10 +31,14 @@ class ArenaSettingsActivity : AppCompatActivity() {
         const val REQUEST_COURT_CHANGED = "COURT_CHANGED"
         const val REQUEST_OPERATION_MODE_CHANGED = "OPERATION_MODE_CHANGED"
         const val REQUEST_RESET_SCORE = "RESET_SCORE"
+        const val REQUEST_REOPEN_LAST_FINISHED_MATCH =
+            "REOPEN_LAST_FINISHED_MATCH"
 
         private const val PREFS_NAME = "padelboard_arena"
         private const val PREF_DEVICE_A = "device_a"
         private const val PREF_DEVICE_B = "device_b"
+        private const val PREF_MATCH_LIFECYCLE_STATE =
+            "match_lifecycle_state"
         private const val ARENA_SETTINGS_LOG_TAG =
             "PadelBoardArena"
     }
@@ -45,6 +50,8 @@ class ArenaSettingsActivity : AppCompatActivity() {
     private lateinit var standaloneClassicModeCheckBox: CheckBox
     private lateinit var selectCourtButton: Button
     private lateinit var resetScoreButton: Button
+    private lateinit var lastClosedMatchStatusText: TextView
+    private lateinit var reopenLastClosedMatchButton: Button
     private lateinit var deviceAStatusText: TextView
     private lateinit var deviceBStatusText: TextView
     private lateinit var assignAButton: Button
@@ -87,6 +94,12 @@ class ArenaSettingsActivity : AppCompatActivity() {
         )
     }
 
+    private val lastClosedMatchStore by lazy {
+        ArenaLastClosedMatchStore(
+            this
+        )
+    }
+
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
@@ -96,6 +109,7 @@ class ArenaSettingsActivity : AppCompatActivity() {
         bindViews()
         updateOperationModeUi()
         updateCourtSelectionUi()
+        updateLastClosedMatchUi()
         updateShellyAssignmentUi()
 
         loginButton.setOnClickListener {
@@ -111,6 +125,7 @@ class ArenaSettingsActivity : AppCompatActivity() {
                 checked
             )
             updateCourtSelectionUi()
+            updateLastClosedMatchUi()
             setResult(
                 RESULT_OK,
                 Intent().putExtra(
@@ -122,6 +137,10 @@ class ArenaSettingsActivity : AppCompatActivity() {
 
         resetScoreButton.setOnClickListener {
             confirmResetScore()
+        }
+
+        reopenLastClosedMatchButton.setOnClickListener {
+            confirmReopenLastClosedMatch()
         }
 
         assignAButton.setOnClickListener {
@@ -163,6 +182,12 @@ class ArenaSettingsActivity : AppCompatActivity() {
         resetScoreButton =
             findViewById(R.id.arenaSettingsResetScoreButton)
 
+        lastClosedMatchStatusText =
+            findViewById(R.id.arenaSettingsLastClosedMatchStatusText)
+
+        reopenLastClosedMatchButton =
+            findViewById(R.id.arenaSettingsReopenLastClosedMatchButton)
+
         deviceAStatusText =
             findViewById(R.id.arenaSettingsDeviceAStatusText)
 
@@ -189,6 +214,7 @@ class ArenaSettingsActivity : AppCompatActivity() {
             courtStatusText.text =
                 "Modalità autonoma\nCollegamento PadelBoard disattivato"
             selectCourtButton.isEnabled = false
+            reopenLastClosedMatchButton.isEnabled = false
             return
         }
 
@@ -235,6 +261,54 @@ class ArenaSettingsActivity : AppCompatActivity() {
             selectedCenterName = "Centro",
             selectedTournamentCourtName = null
         )
+    }
+
+    private fun updateLastClosedMatchUi() {
+        val lastClosedMatch =
+            lastClosedMatchStore.read()
+        val standalone =
+            arenaOperationModeStore.isStandaloneClassicMode()
+        val lifecycleBusy =
+            isLifecycleOperationInProgress()
+        val backendConfigured =
+            runCatching {
+                arenaConfig.requireComplete()
+            }.isSuccess
+
+        lastClosedMatchStatusText.text =
+            if (lastClosedMatch == null) {
+                "Nessun match Arena correggibile"
+            } else {
+                "Ultimo match concluso: " +
+                        lastClosedMatch.teamLabelA +
+                        " vs " +
+                        lastClosedMatch.teamLabelB +
+                        " - " +
+                        lastClosedMatch.gamesA +
+                        "-" +
+                        lastClosedMatch.gamesB
+            }
+
+        reopenLastClosedMatchButton.isEnabled =
+            lastClosedMatch != null &&
+                    !standalone &&
+                    !lifecycleBusy &&
+                    backendConfigured
+    }
+
+    private fun isLifecycleOperationInProgress(): Boolean {
+        val preferences =
+            getSharedPreferences(
+                PREFS_NAME,
+                MODE_PRIVATE
+            )
+        val state =
+            preferences.getString(
+                PREF_MATCH_LIFECYCLE_STATE,
+                null
+            )
+
+        return state == "FINISHING" || state == "REOPENING"
     }
 
     private fun loadArenaCourtsForSelection() {
@@ -447,6 +521,45 @@ class ArenaSettingsActivity : AppCompatActivity() {
                     Intent().putExtra(
                         EXTRA_SETTINGS_REQUEST,
                         REQUEST_RESET_SCORE
+                    )
+                )
+                finish()
+            }
+            .show()
+    }
+
+    private fun confirmReopenLastClosedMatch() {
+        val lastClosedMatch =
+            lastClosedMatchStore.read()
+
+        if (
+            arenaOperationModeStore.isStandaloneClassicMode() ||
+            lastClosedMatch == null ||
+            isLifecycleOperationInProgress()
+        ) {
+            updateLastClosedMatchUi()
+            return
+        }
+
+        AlertDialog.Builder(
+            this
+        )
+            .setMessage(
+                "Riaprire l'ultimo match concluso?\n" +
+                        "Il match attualmente mostrato verra temporaneamente sostituito."
+            )
+            .setNegativeButton(
+                "Annulla",
+                null
+            )
+            .setPositiveButton(
+                "Riapri match"
+            ) { _, _ ->
+                setResult(
+                    RESULT_OK,
+                    Intent().putExtra(
+                        EXTRA_SETTINGS_REQUEST,
+                        REQUEST_REOPEN_LAST_FINISHED_MATCH
                     )
                 )
                 finish()

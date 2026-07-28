@@ -85,11 +85,76 @@ class MainActivityLiveMatchBootstrapSourceTest {
 
         assertTrue(body.contains("previousLiveMatchId"))
         assertTrue(body.contains("matchChanged"))
+        assertTrue(body.contains("replacesFinishedMatch"))
+        assertTrue(body.contains("activateNewLiveMatch("))
         assertTrue(body.contains("isLocalScoreEmptyForLiveMatchBootstrap()"))
         assertTrue(body.contains("bootstrapLocalScoreFromLiveMatch("))
         assertTrue(body.contains("adoptBootstrappedLiveScoreIfNeeded("))
         assertTrue(body.contains("saveCurrentLiveMatchId()"))
         assertFalse(body.contains("previousLiveMatchId == null &&"))
+    }
+
+    @Test
+    fun newLiveMatchClearsFinishedLifecycleBeforeItBecomesCurrent() {
+        val body =
+            applyLiveMatchResponseBody()
+
+        assertTrue(body.contains("lastFinishedMatchId != match.matchId"))
+        assertTrue(body.contains("matchLifecycleState == MatchLifecycleState.FINISHED_BY_ARENA"))
+        assertTrue(body.contains("activateNewLiveMatch("))
+        assertTrue(
+            body.indexOf("activateNewLiveMatch(") <
+                    body.indexOf("currentLiveMatchId =")
+        )
+        assertTrue(
+            body.indexOf("activateNewLiveMatch(") <
+                    body.indexOf("match.sideA.label")
+        )
+        assertTrue(
+            body.indexOf("activateNewLiveMatch(") <
+                    body.indexOf("bootstrapLocalScoreFromLiveMatch(")
+        )
+        assertTrue(body.contains("replacesFinishedMatch ||"))
+    }
+
+    @Test
+    fun matchNullPreservesFinishedLifecycleForReopen() {
+        val body =
+            applyLiveMatchResponseBody()
+        val nullBranch =
+            body.substring(
+                body.indexOf("if (match == null)"),
+                body.indexOf("arenaLifecycleSequenceStore.advanceToAtLeast(")
+            )
+
+        assertFalse(nullBranch.contains("activateNewLiveMatch("))
+        assertFalse(nullBranch.contains("clearMatchLifecycleState("))
+        assertFalse(nullBranch.contains("lastFinishedMatchId = null"))
+        assertFalse(nullBranch.contains("lastFinishedSnapshot = null"))
+        assertFalse(nullBranch.contains("matchLifecycleState ="))
+        assertFalse(nullBranch.contains("currentLiveMatchId = null"))
+    }
+
+    @Test
+    fun activateNewLiveMatchInvalidatesOldLifecycleWithoutTouchingBleOrClients() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun activateNewLiveMatch(",
+                endMarker = "private fun updateTeamLabels("
+            )
+
+        assertTrue(body.contains("clearMatchLifecycleState()"))
+        assertTrue(body.contains("localMatchFinished = false"))
+        assertTrue(body.contains("scoreHistory.clear()"))
+        assertFalse(body.contains("deviceA ="))
+        assertFalse(body.contains("deviceB ="))
+        assertFalse(body.contains("stopBleScan("))
+        assertFalse(body.contains("startBleScan("))
+        assertFalse(body.contains("arenaAuthClient"))
+        assertFalse(body.contains("arenaCourtSelection ="))
+        assertFalse(body.contains("enqueueArenaSnapshot("))
+        assertFalse(body.contains("ArenaRealScoreSync"))
     }
 
     @Test

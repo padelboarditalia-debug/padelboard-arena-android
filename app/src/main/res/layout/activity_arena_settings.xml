@@ -79,6 +79,21 @@
         android:text="Azzera punteggio" />
 
     <TextView
+        android:id="@+id/arenaSettingsLastClosedMatchStatusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Nessun match Arena correggibile"
+        android:textSize="15sp"
+        android:gravity="center"
+        android:paddingTop="12dp" />
+
+    <Button
+        android:id="@+id/arenaSettingsReopenLastClosedMatchButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Correggi ultimo match concluso" />
+
+    <TextView
         android:id="@+id/arenaSettingsShellyTitleText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

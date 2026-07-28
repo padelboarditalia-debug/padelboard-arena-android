@@ -65,6 +65,52 @@ class MainActivityMatchLifecycleSourceTest {
     }
 
     @Test
+    fun finishStoresLastClosedMatchForLaterSettingsCorrection() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun finishCurrentMatch()",
+                endMarker = "private fun reopenFinishedMatch()"
+            )
+
+        assertTrue(
+            body.contains(
+                "lastClosedMatchStore.save("
+            )
+        )
+        assertTrue(
+            body.contains(
+                "ArenaLastClosedMatch("
+            )
+        )
+        assertTrue(
+            body.contains(
+                "matchId = resolvedMatchId"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "courtId = selection.selectedCourtId"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "teamLabelA = teamALabel"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "teamLabelB = teamBLabel"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "reopenAvailable = true"
+            )
+        )
+    }
+
+    @Test
     fun finishUsesDedicatedLifecycleSequenceStore() {
         val source =
             mainActivitySource()
@@ -94,7 +140,7 @@ class MainActivityMatchLifecycleSourceTest {
             methodSlice(
                 source = mainActivitySource(),
                 startMarker = "private fun reopenFinishedMatch()",
-                endMarker = "private fun resetLocalScoreSilently()"
+                endMarker = "private fun reopenLastClosedMatchForCorrection()"
             )
 
         assertTrue(body.contains("arenaLifecycleSequenceStore.nextSequence()"))
@@ -107,6 +153,141 @@ class MainActivityMatchLifecycleSourceTest {
         )
         assertTrue(body.contains("scoreHistory.clear()"))
         assertTrue(body.contains("clearMatchLifecycleState()"))
+    }
+
+    @Test
+    fun settingsRequestReopensLastClosedMatchThroughMain() {
+        val source =
+            mainActivitySource()
+        val launcherBody =
+            methodSlice(
+                source = source,
+                startMarker = "private val arenaSettingsLauncher =",
+                endMarker = "private val permissionLauncher ="
+            )
+
+        assertTrue(
+            launcherBody.contains(
+                "ArenaSettingsActivity.REQUEST_REOPEN_LAST_FINISHED_MATCH"
+            )
+        )
+        assertTrue(
+            launcherBody.contains(
+                "reopenLastClosedMatchForCorrection()"
+            )
+        )
+    }
+
+    @Test
+    fun lastClosedReopenSuspendsCurrentMatchAndDoesNotPostState() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun reopenLastClosedMatchForCorrection()",
+                endMarker = "private fun captureSuspendedCurrentMatch()"
+            )
+
+        assertTrue(
+            body.contains(
+                "lastClosedMatchStore.read()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "captureSuspendedCurrentMatch()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "stopLiveMatchPolling()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "lifecycleClient.reopenMatch("
+            )
+        )
+        assertTrue(
+            body.contains(
+                "restoreScoreSnapshot("
+            )
+        )
+        assertTrue(
+            body.contains(
+                "lastClosedMatch.toScoreSnapshot()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "lastClosedMatchStore.markReopenUnavailable()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "restoreSuspendedCurrentMatch("
+            )
+        )
+        assertFalse(
+            body.contains(
+                "enqueueArenaSnapshot("
+            )
+        )
+        assertFalse(
+            body.contains(
+                "adoptBootstrappedLiveScoreIfNeeded("
+            )
+        )
+    }
+
+    @Test
+    fun suspendedCurrentMatchKeepsScoreLabelsLifecycleAndHistoryOnFailure() {
+        val source =
+            mainActivitySource()
+        val captureBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun captureSuspendedCurrentMatch()",
+                endMarker = "private fun restoreSuspendedCurrentMatch("
+            )
+        val restoreBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun restoreSuspendedCurrentMatch(",
+                endMarker = "private fun ArenaLastClosedMatch.toScoreSnapshot()"
+            )
+
+        assertTrue(captureBody.contains("currentLiveMatchId = currentLiveMatchId"))
+        assertTrue(captureBody.contains("teamLabelA = teamALabel"))
+        assertTrue(captureBody.contains("teamLabelB = teamBLabel"))
+        assertTrue(captureBody.contains("snapshot = captureCurrentScoreSnapshot()"))
+        assertTrue(captureBody.contains("matchLifecycleState = matchLifecycleState"))
+        assertTrue(captureBody.contains("scoreHistory = scoreHistory.toList()"))
+        assertTrue(restoreBody.contains("currentLiveMatchId ="))
+        assertTrue(restoreBody.contains("updateTeamLabels("))
+        assertTrue(restoreBody.contains("restoreScoreSnapshot("))
+        assertTrue(restoreBody.contains("matchLifecycleState ="))
+        assertTrue(restoreBody.contains("scoreHistory.clear()"))
+        assertTrue(restoreBody.contains("scoreHistory.addAll("))
+    }
+
+    @Test
+    fun lastClosedStorePreservesSnapshotAndMarksReopenUnavailable() {
+        val source =
+            File(
+                "src/main/java/com/example/padelboardarena/arena/ArenaLastClosedMatchStore.kt"
+            ).readText()
+
+        assertTrue(source.contains("data class ArenaLastClosedMatch("))
+        assertTrue(source.contains("val matchId: String"))
+        assertTrue(source.contains("val courtId: String"))
+        assertTrue(source.contains("val teamLabelA: String"))
+        assertTrue(source.contains("val teamLabelB: String"))
+        assertTrue(source.contains("val gamesA: Int"))
+        assertTrue(source.contains("val gamesB: Int"))
+        assertTrue(source.contains("val finishEventId: String"))
+        assertTrue(source.contains("val finishEventSequence: Int"))
+        assertTrue(source.contains("val reopenAvailable: Boolean"))
+        assertTrue(source.contains("fun markReopenUnavailable()"))
     }
 
     @Test

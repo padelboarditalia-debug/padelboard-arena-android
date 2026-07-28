@@ -106,6 +106,28 @@ class ArenaSettingsSourceTest {
     }
 
     @Test
+    fun settingsLayoutContainsLastClosedMatchCorrectionCommand() {
+        val layout =
+            settingsLayout()
+
+        assertTrue(
+            layout.contains(
+                "arenaSettingsLastClosedMatchStatusText"
+            )
+        )
+        assertTrue(
+            layout.contains(
+                "arenaSettingsReopenLastClosedMatchButton"
+            )
+        )
+        assertTrue(
+            layout.contains(
+                "Correggi ultimo match concluso"
+            )
+        )
+    }
+
+    @Test
     fun settingsLayoutShowsAssociatedAndMissingStates() {
         val layout =
             settingsLayout()
@@ -266,6 +288,97 @@ class ArenaSettingsSourceTest {
             ).findAll(
                 helperBody
             ).count()
+        )
+    }
+
+    @Test
+    fun settingsLastClosedCorrectionReturnsOnlyARequestToMain() {
+        val source =
+            settingsActivitySource()
+        val body =
+            methodSlice(
+                source = source,
+                startMarker = "private fun confirmReopenLastClosedMatch()",
+                endMarker = "private fun runArenaLogin()"
+            )
+
+        assertTrue(
+            source.contains(
+                "const val REQUEST_REOPEN_LAST_FINISHED_MATCH ="
+            )
+        )
+        assertTrue(
+            body.contains(
+                "lastClosedMatchStore.read()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "REQUEST_REOPEN_LAST_FINISHED_MATCH"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "Intent().putExtra("
+            )
+        )
+        assertTrue(
+            body.contains(
+                "setResult("
+            )
+        )
+        assertTrue(
+            body.contains(
+                "finish()"
+            )
+        )
+        assertFalse(
+            body.contains(
+                "ArenaMatchLifecycleClient"
+            )
+        )
+        assertFalse(
+            body.contains(
+                "reopenMatch("
+            )
+        )
+    }
+
+    @Test
+    fun settingsLastClosedCorrectionIsDisabledWhenUnsafe() {
+        val source =
+            settingsActivitySource()
+        val body =
+            methodSlice(
+                source = source,
+                startMarker = "private fun updateLastClosedMatchUi()",
+                endMarker = "private fun isLifecycleOperationInProgress()"
+            )
+
+        assertTrue(
+            body.contains(
+                "lastClosedMatchStore.read()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "arenaOperationModeStore.isStandaloneClassicMode()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "isLifecycleOperationInProgress()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "arenaConfig.requireComplete()"
+            )
+        )
+        assertTrue(
+            body.contains(
+                "reopenLastClosedMatchButton.isEnabled"
+            )
         )
     }
 
