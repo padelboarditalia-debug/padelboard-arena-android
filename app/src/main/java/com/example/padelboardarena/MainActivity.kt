@@ -39,9 +39,17 @@ import com.example.padelboardarena.arena.AndroidKeystoreArenaSessionStore
 import com.example.padelboardarena.arena.ArenaBuildConfig
 import com.example.padelboardarena.arena.ArenaCourtSelection
 import com.example.padelboardarena.arena.ArenaCourtSelectionStore
+import com.example.padelboardarena.arena.ArenaLiveMatch
 import com.example.padelboardarena.arena.ArenaLiveMatchClient
 import com.example.padelboardarena.arena.ArenaLiveMatchResponse
+import com.example.padelboardarena.arena.ArenaLiveScoreAdoptionClient
+import com.example.padelboardarena.arena.ArenaLiveScoreAdoptionRequest
+import com.example.padelboardarena.arena.SharedPreferencesArenaLifecycleSequenceStore
 import com.example.padelboardarena.arena.ArenaManualUiMessages
+import com.example.padelboardarena.arena.ArenaMatchLifecycleClient
+import com.example.padelboardarena.arena.ArenaMatchLifecycleResult
+import com.example.padelboardarena.arena.ArenaMatchLifecycleScoreSnapshot
+import com.example.padelboardarena.arena.ArenaMatchReopenRequest
 import com.example.padelboardarena.arena.ArenaOperationModeStore
 import com.example.padelboardarena.arena.ArenaRealScoreSnapshotFactory
 import com.example.padelboardarena.arena.ArenaRealScoreState
@@ -72,6 +80,25 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_TIE_BREAK_POINTS_A = "tie_break_points_a"
         private const val PREF_TIE_BREAK_POINTS_B = "tie_break_points_b"
         private const val PREF_LOCAL_MATCH_FINISHED = "local_match_finished"
+        private const val PREF_MATCH_LIFECYCLE_STATE = "match_lifecycle_state"
+        private const val PREF_LAST_FINISHED_COURT_ID = "last_finished_court_id"
+        private const val PREF_LAST_FINISHED_MATCH_ID = "last_finished_match_id"
+        private const val PREF_LAST_FINISH_EVENT_ID = "last_finish_event_id"
+        private const val PREF_LAST_FINISH_EVENT_SEQUENCE = "last_finish_event_sequence"
+        private const val PREF_LAST_FINISHED_POINTS_A = "last_finished_points_a"
+        private const val PREF_LAST_FINISHED_POINTS_B = "last_finished_points_b"
+        private const val PREF_LAST_FINISHED_GAMES_A = "last_finished_games_a"
+        private const val PREF_LAST_FINISHED_GAMES_B = "last_finished_games_b"
+        private const val PREF_LAST_FINISHED_SETS_A = "last_finished_sets_a"
+        private const val PREF_LAST_FINISHED_SETS_B = "last_finished_sets_b"
+        private const val PREF_LAST_FINISHED_ADVANTAGE_SIDE = "last_finished_advantage_side"
+        private const val PREF_LAST_FINISHED_KILLER_MODE = "last_finished_killer_mode"
+        private const val PREF_LAST_FINISHED_TIE_BREAK_ACTIVE = "last_finished_tie_break_active"
+        private const val PREF_LAST_FINISHED_TIE_BREAK_POINTS_A = "last_finished_tie_break_points_a"
+        private const val PREF_LAST_FINISHED_TIE_BREAK_POINTS_B = "last_finished_tie_break_points_b"
+        private const val PREF_LAST_FINISHED_LOCAL_MATCH_FINISHED = "last_finished_local_match_finished"
+        private const val PREF_CURRENT_LIVE_MATCH_ID = "current_live_match_id"
+        private const val PREF_LAST_ADOPTED_LIVE_SCORE_KEY = "last_adopted_live_score_key"
 
         private const val PREF_ADVANTAGE_SIDE = "advantage_side"
         private const val PREF_KILLER_MODE = "killer_mode"
@@ -145,6 +172,8 @@ class MainActivity : AppCompatActivity() {
 
     private var scoreAnimationA: AnimatorSet? = null
     private var scoreAnimationB: AnimatorSet? = null
+    private var gameAnimationA: AnimatorSet? = null
+    private var gameAnimationB: AnimatorSet? = null
     private var teamALabel =
         DEFAULT_TEAM_A_LABEL
     private var teamBLabel =
@@ -156,7 +185,17 @@ class MainActivity : AppCompatActivity() {
     private var arenaCourtSelection: ArenaCourtSelection? = null
     private var arenaApiClient: ArenaApiClient? = null
     private var arenaLiveMatchClient: ArenaLiveMatchClient? = null
+    private var arenaLiveScoreAdoptionClient: ArenaLiveScoreAdoptionClient? = null
     private var arenaRealScoreSync: ArenaRealScoreSync? = null
+    private var arenaMatchLifecycleClient: ArenaMatchLifecycleClient? = null
+    private var currentLiveMatchId: String? = null
+    private var lastAdoptedLiveScoreKey: String? = null
+    private var matchLifecycleState = MatchLifecycleState.ACTIVE
+    private var lastFinishedCourtId: String? = null
+    private var lastFinishedMatchId: String? = null
+    private var lastFinishedSnapshot: ScoreSnapshot? = null
+    private var lastFinishEventId: String? = null
+    private var lastFinishEventSequence: Int = 0
 
     private val liveMatchPollingHandler =
         Handler(
@@ -260,6 +299,18 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private val arenaSequenceStore by lazy {
+        SharedPreferencesArenaManualSequenceStore(
+            preferences
+        )
+    }
+
+    private val arenaLifecycleSequenceStore by lazy {
+        SharedPreferencesArenaLifecycleSequenceStore(
+            preferences
+        )
+    }
+
     private val arenaAuthClient by lazy {
         ArenaAuthClient(
             config = arenaConfig,
@@ -283,27 +334,43 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
-            reloadArenaOperationMode()
-            reloadArenaCourtSelection()
-            bootstrapArenaSession()
-
-            when (
+            val settingsRequest =
                 result.data?.getStringExtra(
                     ArenaSettingsActivity.EXTRA_SETTINGS_REQUEST
                 )
-            ) {
+
+            reloadArenaOperationMode()
+
+            when (settingsRequest) {
                 ArenaSettingsActivity.REQUEST_ASSIGN_SIDE_A ->
-                    requestShellyAssignment(
+                    handleSettingsAssignmentRequest(
                         AssignmentMode.SIDE_A
                     )
 
                 ArenaSettingsActivity.REQUEST_ASSIGN_SIDE_B ->
-                    requestShellyAssignment(
+                    handleSettingsAssignmentRequest(
                         AssignmentMode.SIDE_B
                     )
 
                 ArenaSettingsActivity.REQUEST_RESET_SCORE ->
-                    resetMatch()
+                    if (standaloneClassicMode) {
+                        resetMatch()
+                    } else {
+                        resetLocalScoreWithoutArenaSync(
+                            statusMessage =
+                                "Tabellone azzerato - riallineamento PadelBoard",
+                            eventMessage =
+                                "In attesa del punteggio ufficiale"
+                        )
+                        reloadArenaCourtSelection()
+                        bootstrapArenaSession()
+                        refreshLiveMatchIfNeeded()
+                    }
+
+                else -> {
+                    reloadArenaCourtSelection()
+                    bootstrapArenaSession()
+                }
             }
         }
 
@@ -599,18 +666,30 @@ class MainActivity : AppCompatActivity() {
     private fun configureArenaCourtClients(
         selection: ArenaCourtSelection?
     ) {
+        val previousSelectedCourtId =
+            arenaCourtSelection?.selectedCourtId
+
         stopLiveMatchPolling()
         liveMatchClientGeneration += 1
         liveMatchRequestInFlight = false
 
         arenaApiClient?.shutdown()
         arenaLiveMatchClient?.shutdown()
+        arenaLiveScoreAdoptionClient?.shutdown()
+        arenaMatchLifecycleClient?.shutdown()
 
         if (standaloneClassicMode) {
             arenaCourtSelection = null
             arenaApiClient = null
             arenaLiveMatchClient = null
+            arenaLiveScoreAdoptionClient = null
             arenaRealScoreSync = null
+            arenaMatchLifecycleClient = null
+            currentLiveMatchId = null
+            lastAdoptedLiveScoreKey = null
+            saveCurrentLiveMatchId()
+            clearMatchLifecycleState()
+            saveMatchLifecycleState()
             updateTeamLabels(
                 DEFAULT_TEAM_A_LABEL,
                 DEFAULT_TEAM_B_LABEL
@@ -628,7 +707,12 @@ class MainActivity : AppCompatActivity() {
         if (selection == null) {
             arenaApiClient = null
             arenaLiveMatchClient = null
+            arenaLiveScoreAdoptionClient = null
             arenaRealScoreSync = null
+            arenaMatchLifecycleClient = null
+            currentLiveMatchId = null
+            lastAdoptedLiveScoreKey = null
+            saveCurrentLiveMatchId()
             updateTeamLabels(
                 DEFAULT_TEAM_A_LABEL,
                 DEFAULT_TEAM_B_LABEL
@@ -636,6 +720,15 @@ class MainActivity : AppCompatActivity() {
             arenaLastCallText.text =
                 "Seleziona campo Arena"
             return
+        }
+
+        if (
+            previousSelectedCourtId != null &&
+            previousSelectedCourtId != selection.selectedCourtId
+        ) {
+            currentLiveMatchId = null
+            lastAdoptedLiveScoreKey = null
+            saveCurrentLiveMatchId()
         }
 
         val selectedConfig =
@@ -655,18 +748,32 @@ class MainActivity : AppCompatActivity() {
                 tokenProvider = arenaAuthClient
             )
 
+        val liveScoreAdoptionClient =
+            ArenaLiveScoreAdoptionClient(
+                config = selectedConfig,
+                tokenProvider = arenaAuthClient
+            )
+
+        val matchLifecycleClient =
+            ArenaMatchLifecycleClient(
+                config = selectedConfig,
+                tokenProvider = arenaAuthClient
+            )
+
         arenaApiClient =
             apiClient
         arenaLiveMatchClient =
             liveMatchClient
+        arenaLiveScoreAdoptionClient =
+            liveScoreAdoptionClient
+        arenaMatchLifecycleClient =
+            matchLifecycleClient
         arenaRealScoreSync =
             ArenaRealScoreSync(
                 snapshotFactory =
                     ArenaRealScoreSnapshotFactory(
                         sequenceStore =
-                            SharedPreferencesArenaManualSequenceStore(
-                                preferences
-                            )
+                            arenaSequenceStore
                     ),
                 sender =
                     ArenaApiScoreSnapshotSender(
@@ -693,6 +800,10 @@ class MainActivity : AppCompatActivity() {
 
         arenaLastCallText.text =
             "${selection.selectedCenterName} - ${selection.selectedCourtLabel}"
+
+        clearFinishedLifecycleIfCourtChanged(
+            selection.selectedCourtId
+        )
 
         if (activityVisible && arenaAuthClient.currentAccessToken() != null) {
             startLiveMatchPolling()
@@ -727,10 +838,40 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        arenaLifecycleSequenceStore.advanceToAtLeast(
+            match.lastLifecycleEventSequence
+        )
+
+        val previousLiveMatchId =
+            currentLiveMatchId
+        val matchChanged =
+            previousLiveMatchId != null &&
+                    previousLiveMatchId != match.matchId
+        val shouldBootstrapScore =
+            matchChanged ||
+                    isLocalScoreEmptyForLiveMatchBootstrap()
+
+        currentLiveMatchId =
+            match.matchId
+
         updateTeamLabels(
             match.sideA.label,
             match.sideB.label
         )
+
+        if (shouldBootstrapScore) {
+            bootstrapLocalScoreFromLiveMatch(
+                match = match,
+                clearPreviousHistory = matchChanged
+            )
+            adoptBootstrappedLiveScoreIfNeeded(
+                match
+            )
+            statusText.text =
+                "Tabellone riallineato"
+        } else {
+            saveCurrentLiveMatchId()
+        }
 
         arenaLastCallText.text =
             "Partita live aggiornata"
@@ -764,12 +905,143 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun isLocalScoreEmptyForLiveMatchBootstrap(): Boolean {
+        return pointsA == 0 &&
+                pointsB == 0 &&
+                gamesA == 0 &&
+                gamesB == 0 &&
+                setsA == 0 &&
+                setsB == 0 &&
+                scoreHistory.isEmpty() &&
+                matchLifecycleState == MatchLifecycleState.ACTIVE
+    }
+
+    private fun bootstrapLocalScoreFromLiveMatch(
+        match: ArenaLiveMatch,
+        clearPreviousHistory: Boolean
+    ) {
+        gamesA =
+            match.scoreA.coerceAtLeast(
+                0
+            )
+        gamesB =
+            match.scoreB.coerceAtLeast(
+                0
+            )
+        setsA =
+            match.setsA.coerceAtLeast(
+                0
+            )
+        setsB =
+            match.setsB.coerceAtLeast(
+                0
+            )
+        pointsA = 0
+        pointsB = 0
+        advantageSide = null
+        killerMode = false
+        tieBreakActive = false
+        tieBreakPointsA = 0
+        tieBreakPointsB = 0
+
+        if (clearPreviousHistory) {
+            scoreHistory.clear()
+        }
+
+        saveState()
+        updateScreen()
+    }
+
+    private fun adoptBootstrappedLiveScoreIfNeeded(
+        match: ArenaLiveMatch
+    ) {
+        if (standaloneClassicMode) {
+            return
+        }
+
+        if (matchLifecycleState != MatchLifecycleState.ACTIVE) {
+            return
+        }
+
+        val adoptionClient =
+            arenaLiveScoreAdoptionClient ?: return
+
+        val adoptionKey =
+            liveScoreAdoptionKey(
+                match
+            )
+
+        if (lastAdoptedLiveScoreKey == adoptionKey) {
+            return
+        }
+
+        val request =
+            ArenaLiveScoreAdoptionRequest(
+                eventId = UUID.randomUUID().toString(),
+                eventSequence = arenaSequenceStore.nextSequence(),
+                matchId = match.matchId,
+                gamesA = match.scoreA.coerceAtLeast(
+                    0
+                ),
+                gamesB = match.scoreB.coerceAtLeast(
+                    0
+                ),
+                setsA = match.setsA.coerceAtLeast(
+                    0
+                ),
+                setsB = match.setsB.coerceAtLeast(
+                    0
+                )
+            )
+
+        adoptionClient.adoptLiveScore(
+            request
+        ) { result ->
+            runOnUiThread {
+                if (isLiveScoreAdoptionSuccess(result.status)) {
+                    lastAdoptedLiveScoreKey =
+                        adoptionKey
+                    saveCurrentLiveMatchId()
+                    arenaLastCallText.text =
+                        "Baseline Arena aggiornata"
+                } else {
+                    arenaLastCallText.text =
+                        "Baseline Arena non aggiornata"
+                }
+            }
+        }
+    }
+
+    private fun liveScoreAdoptionKey(
+        match: ArenaLiveMatch
+    ): String {
+        return "${match.matchId}:${match.scoreA}-${match.scoreB}"
+    }
+
+    private fun isLiveScoreAdoptionSuccess(
+        status: String?
+    ): Boolean {
+        return status == "adopted" ||
+                status == "already_adopted" ||
+                status == "duplicate_event"
+    }
+
     private fun openArenaSettings() {
         arenaSettingsLauncher.launch(
             Intent(
                 this,
                 ArenaSettingsActivity::class.java
             )
+        )
+    }
+
+    private fun handleSettingsAssignmentRequest(
+        mode: AssignmentMode
+    ) {
+        reloadArenaCourtSelection()
+        bootstrapArenaSession()
+        requestShellyAssignment(
+            mode
         )
     }
 
@@ -897,6 +1169,19 @@ class MainActivity : AppCompatActivity() {
                 PREF_LOCAL_MATCH_FINISHED,
                 false
             )
+
+        currentLiveMatchId =
+            preferences.getString(
+                PREF_CURRENT_LIVE_MATCH_ID,
+                null
+            )
+        lastAdoptedLiveScoreKey =
+            preferences.getString(
+                PREF_LAST_ADOPTED_LIVE_SCORE_KEY,
+                null
+            )
+
+        loadMatchLifecycleState()
     }
 
     private fun saveState() {
@@ -956,6 +1241,234 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(
                 PREF_LOCAL_MATCH_FINISHED,
                 localMatchFinished
+            )
+            .putString(
+                PREF_CURRENT_LIVE_MATCH_ID,
+                currentLiveMatchId
+            )
+            .putString(
+                PREF_LAST_ADOPTED_LIVE_SCORE_KEY,
+                lastAdoptedLiveScoreKey
+            )
+            .apply()
+
+        saveMatchLifecycleState()
+    }
+
+    private fun saveCurrentLiveMatchId() {
+        preferences.edit()
+            .putString(
+                PREF_CURRENT_LIVE_MATCH_ID,
+                currentLiveMatchId
+            )
+            .putString(
+                PREF_LAST_ADOPTED_LIVE_SCORE_KEY,
+                lastAdoptedLiveScoreKey
+            )
+            .apply()
+    }
+
+    private fun loadMatchLifecycleState() {
+        matchLifecycleState =
+            MatchLifecycleState.fromStoredValue(
+                preferences.getString(
+                    PREF_MATCH_LIFECYCLE_STATE,
+                    null
+                )
+            )
+
+        lastFinishedCourtId =
+            preferences.getString(
+                PREF_LAST_FINISHED_COURT_ID,
+                null
+            )
+
+        lastFinishedMatchId =
+            preferences.getString(
+                PREF_LAST_FINISHED_MATCH_ID,
+                null
+            )
+
+        lastFinishEventId =
+            preferences.getString(
+                PREF_LAST_FINISH_EVENT_ID,
+                null
+            )
+
+        lastFinishEventSequence =
+            preferences.getInt(
+                PREF_LAST_FINISH_EVENT_SEQUENCE,
+                0
+            )
+
+        lastFinishedSnapshot =
+            if (
+                matchLifecycleState ==
+                MatchLifecycleState.FINISHED_BY_ARENA
+            ) {
+                ScoreSnapshot(
+                    pointsA = preferences.getInt(
+                        PREF_LAST_FINISHED_POINTS_A,
+                        0
+                    ),
+                    pointsB = preferences.getInt(
+                        PREF_LAST_FINISHED_POINTS_B,
+                        0
+                    ),
+                    gamesA = preferences.getInt(
+                        PREF_LAST_FINISHED_GAMES_A,
+                        0
+                    ),
+                    gamesB = preferences.getInt(
+                        PREF_LAST_FINISHED_GAMES_B,
+                        0
+                    ),
+                    setsA = preferences.getInt(
+                        PREF_LAST_FINISHED_SETS_A,
+                        0
+                    ),
+                    setsB = preferences.getInt(
+                        PREF_LAST_FINISHED_SETS_B,
+                        0
+                    ),
+                    advantageSide =
+                        when (
+                            preferences.getString(
+                                PREF_LAST_FINISHED_ADVANTAGE_SIDE,
+                                null
+                            )
+                        ) {
+                            "A" -> Side.A
+                            "B" -> Side.B
+                            else -> null
+                        },
+                    killerMode = preferences.getBoolean(
+                        PREF_LAST_FINISHED_KILLER_MODE,
+                        false
+                    ),
+                    tieBreakActive = preferences.getBoolean(
+                        PREF_LAST_FINISHED_TIE_BREAK_ACTIVE,
+                        false
+                    ),
+                    tieBreakPointsA = preferences.getInt(
+                        PREF_LAST_FINISHED_TIE_BREAK_POINTS_A,
+                        0
+                    ),
+                    tieBreakPointsB = preferences.getInt(
+                        PREF_LAST_FINISHED_TIE_BREAK_POINTS_B,
+                        0
+                    ),
+                    localMatchFinished = preferences.getBoolean(
+                        PREF_LAST_FINISHED_LOCAL_MATCH_FINISHED,
+                        false
+                    ),
+                    scoringSide = Side.A
+                )
+            } else {
+                null
+            }
+    }
+
+    private fun saveMatchLifecycleState() {
+        preferences.edit()
+            .putString(
+                PREF_MATCH_LIFECYCLE_STATE,
+                matchLifecycleState.name
+            )
+            .putString(
+                PREF_LAST_FINISHED_COURT_ID,
+                lastFinishedCourtId
+            )
+            .putString(
+                PREF_LAST_FINISHED_MATCH_ID,
+                lastFinishedMatchId
+            )
+            .putString(
+                PREF_LAST_FINISH_EVENT_ID,
+                lastFinishEventId
+            )
+            .putInt(
+                PREF_LAST_FINISH_EVENT_SEQUENCE,
+                lastFinishEventSequence
+            )
+            .apply()
+
+        saveLastFinishedSnapshot()
+    }
+
+    private fun saveLastFinishedSnapshot() {
+        val snapshot =
+            lastFinishedSnapshot
+
+        val editor =
+            preferences.edit()
+
+        if (snapshot == null) {
+            editor
+                .remove(PREF_LAST_FINISHED_POINTS_A)
+                .remove(PREF_LAST_FINISHED_POINTS_B)
+                .remove(PREF_LAST_FINISHED_GAMES_A)
+                .remove(PREF_LAST_FINISHED_GAMES_B)
+                .remove(PREF_LAST_FINISHED_SETS_A)
+                .remove(PREF_LAST_FINISHED_SETS_B)
+                .remove(PREF_LAST_FINISHED_ADVANTAGE_SIDE)
+                .remove(PREF_LAST_FINISHED_KILLER_MODE)
+                .remove(PREF_LAST_FINISHED_TIE_BREAK_ACTIVE)
+                .remove(PREF_LAST_FINISHED_TIE_BREAK_POINTS_A)
+                .remove(PREF_LAST_FINISHED_TIE_BREAK_POINTS_B)
+                .remove(PREF_LAST_FINISHED_LOCAL_MATCH_FINISHED)
+                .apply()
+            return
+        }
+
+        editor
+            .putInt(
+                PREF_LAST_FINISHED_POINTS_A,
+                snapshot.pointsA
+            )
+            .putInt(
+                PREF_LAST_FINISHED_POINTS_B,
+                snapshot.pointsB
+            )
+            .putInt(
+                PREF_LAST_FINISHED_GAMES_A,
+                snapshot.gamesA
+            )
+            .putInt(
+                PREF_LAST_FINISHED_GAMES_B,
+                snapshot.gamesB
+            )
+            .putInt(
+                PREF_LAST_FINISHED_SETS_A,
+                snapshot.setsA
+            )
+            .putInt(
+                PREF_LAST_FINISHED_SETS_B,
+                snapshot.setsB
+            )
+            .putString(
+                PREF_LAST_FINISHED_ADVANTAGE_SIDE,
+                snapshot.advantageSide?.name
+            )
+            .putBoolean(
+                PREF_LAST_FINISHED_KILLER_MODE,
+                snapshot.killerMode
+            )
+            .putBoolean(
+                PREF_LAST_FINISHED_TIE_BREAK_ACTIVE,
+                snapshot.tieBreakActive
+            )
+            .putInt(
+                PREF_LAST_FINISHED_TIE_BREAK_POINTS_A,
+                snapshot.tieBreakPointsA
+            )
+            .putInt(
+                PREF_LAST_FINISHED_TIE_BREAK_POINTS_B,
+                snapshot.tieBreakPointsB
+            )
+            .putBoolean(
+                PREF_LAST_FINISHED_LOCAL_MATCH_FINISHED,
+                snapshot.localMatchFinished
             )
             .apply()
     }
@@ -1020,6 +1533,18 @@ class MainActivity : AppCompatActivity() {
                         else ->
                             "Modalità autonoma"
                     }
+
+                matchLifecycleState ==
+                        MatchLifecycleState.FINISHED_BY_ARENA ->
+                    "Partita conclusa - doppio tap per correggere"
+
+                matchLifecycleState ==
+                        MatchLifecycleState.FINISHING ->
+                    "Chiusura partita..."
+
+                matchLifecycleState ==
+                        MatchLifecycleState.REOPENING ->
+                    "Riapertura partita..."
 
                 killerMode ->
                     "KILLER: il prossimo punto vince il game"
@@ -1725,25 +2250,137 @@ class MainActivity : AppCompatActivity() {
                 registerPoint(side)
 
             ButtonEvent.DOUBLE_PRESS ->
-                undoLastAction()
+                handleDoublePress()
 
-            ButtonEvent.TRIPLE_PRESS -> {
-                statusText.text =
-                    "Tripla pressione rilevata"
-
-                eventText.text =
-                    "Nessuna azione configurata"
-            }
+            ButtonEvent.TRIPLE_PRESS ->
+                correctGameForSide(side)
 
             ButtonEvent.LONG_PRESS,
-            ButtonEvent.HOLD_PRESS -> {
+            ButtonEvent.HOLD_PRESS ->
+                handleLongPress()
+        }
+    }
+
+    private fun correctGameForSide(
+        side: Side
+    ) {
+        if (standaloneClassicMode) {
+            if (localMatchFinished) {
                 statusText.text =
-                    "Pressione lunga rilevata"
+                    "Partita conclusa"
 
                 eventText.text =
-                    "Nessuna azione configurata"
+                    "Correzione non disponibile"
+                return
+            }
+        } else if (
+            matchLifecycleState !=
+            MatchLifecycleState.ACTIVE
+        ) {
+            statusText.text =
+                "Operazione in corso"
+
+            eventText.text =
+                if (
+                    matchLifecycleState ==
+                    MatchLifecycleState.FINISHED_BY_ARENA
+                ) {
+                    "Doppio tap per correggere"
+                } else {
+                    "Attendi il completamento"
+                }
+            return
+        }
+
+        val currentGames =
+            when (side) {
+                Side.A -> gamesA
+                Side.B -> gamesB
+            }
+
+        if (currentGames <= 0) {
+            statusText.text =
+                "Nessun game da correggere"
+
+            eventText.text =
+                "Tripla pressione"
+            return
+        }
+
+        saveSnapshot(
+            side
+        )
+
+        when (side) {
+            Side.A ->
+                gamesA =
+                    (gamesA - 1).coerceAtLeast(
+                        0
+                    )
+
+            Side.B ->
+                gamesB =
+                    (gamesB - 1).coerceAtLeast(
+                        0
+                    )
+        }
+
+        statusText.text =
+            "Game ${genericTeamLabelForSide(side)} corretto"
+
+        eventText.text =
+            "Tripla pressione"
+
+        if (standaloneClassicMode) {
+            saveState()
+            updateScreen()
+        } else {
+            saveStateUpdateScreenAndEnqueueArenaSnapshot()
+        }
+
+        animateGameCorrectionChange(
+            side
+        )
+        announceGameCorrection(
+            side
+        )
+    }
+
+    private fun handleDoublePress() {
+        if (standaloneClassicMode) {
+            undoLastAction()
+            return
+        }
+
+        when (matchLifecycleState) {
+            MatchLifecycleState.ACTIVE ->
+                undoLastAction()
+
+            MatchLifecycleState.FINISHED_BY_ARENA ->
+                reopenFinishedMatch()
+
+            MatchLifecycleState.FINISHING,
+            MatchLifecycleState.REOPENING -> {
+                statusText.text =
+                    "Operazione in corso"
+
+                eventText.text =
+                    "Attendi il completamento"
             }
         }
+    }
+
+    private fun handleLongPress() {
+        if (standaloneClassicMode) {
+            statusText.text =
+                "Pressione lunga rilevata"
+
+            eventText.text =
+                "Nessuna azione configurata"
+            return
+        }
+
+        finishCurrentMatch()
     }
 
     private fun assignDevice(
@@ -1834,6 +2471,80 @@ class MainActivity : AppCompatActivity() {
             side = side,
             flashColor = undoFlashColor
         )
+    }
+
+    private fun animateGameCorrectionChange(
+        side: Side
+    ) {
+        val target =
+            when (side) {
+                Side.A -> gamesAText
+                Side.B -> gamesBText
+            }
+        val previousAnimation =
+            when (side) {
+                Side.A -> gameAnimationA
+                Side.B -> gameAnimationB
+            }
+        val standardColor =
+            Color.rgb(
+                183,
+                242,
+                75
+            )
+
+        previousAnimation?.cancel()
+        target.setTextColor(
+            standardColor
+        )
+
+        val animation =
+            AnimatorSet().apply {
+                playSequentially(
+                    ObjectAnimator.ofArgb(
+                        target,
+                        "textColor",
+                        standardColor,
+                        undoFlashColor
+                    ).apply {
+                        duration = SCORE_FLASH_RISE_MS
+                    },
+                    ObjectAnimator.ofArgb(
+                        target,
+                        "textColor",
+                        undoFlashColor,
+                        standardColor
+                    ).apply {
+                        duration = SCORE_FLASH_FALL_MS
+                    }
+                )
+                addListener(
+                    object : AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(
+                            animation: Animator
+                        ) {
+                            target.setTextColor(
+                                standardColor
+                            )
+                        }
+
+                        override fun onAnimationCancel(
+                            animation: Animator
+                        ) {
+                            target.setTextColor(
+                                standardColor
+                            )
+                        }
+                    }
+                )
+            }
+
+        when (side) {
+            Side.A -> gameAnimationA = animation
+            Side.B -> gameAnimationB = animation
+        }
+
+        animation.start()
     }
 
     private fun animateScoreChange(
@@ -1944,6 +2655,25 @@ class MainActivity : AppCompatActivity() {
             registerStandaloneClassicPoint(
                 scoringSide
             )
+            return
+        }
+
+        if (
+            matchLifecycleState !=
+            MatchLifecycleState.ACTIVE
+        ) {
+            statusText.text =
+                "Operazione in corso"
+
+            eventText.text =
+                if (
+                    matchLifecycleState ==
+                    MatchLifecycleState.FINISHED_BY_ARENA
+                ) {
+                    "Doppio tap per correggere"
+                } else {
+                    "Attendi il completamento"
+                }
             return
         }
 
@@ -2147,6 +2877,15 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun announceGameCorrection(
+        side: Side
+    ) {
+        scoreAnnouncer.announceGameCorrection(
+            state = currentSpeechState(),
+            correctedSide = side
+        )
+    }
+
     private fun currentSpeechState(): ArenaScoreSpeechState {
         return ArenaScoreSpeechState(
             pointsA = if (tieBreakActive) tieBreakPointsA else pointsA,
@@ -2250,6 +2989,15 @@ class MainActivity : AppCompatActivity() {
                 Side.A -> DEFAULT_TEAM_A_LABEL
                 Side.B -> DEFAULT_TEAM_B_LABEL
             }
+        }
+    }
+
+    private fun genericTeamLabelForSide(
+        side: Side
+    ): String {
+        return when (side) {
+            Side.A -> DEFAULT_TEAM_A_LABEL
+            Side.B -> DEFAULT_TEAM_B_LABEL
         }
     }
 
@@ -2404,33 +3152,429 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun resetMatch() {
+    private fun finishCurrentMatch() {
+        if (
+            matchLifecycleState ==
+            MatchLifecycleState.FINISHING ||
+            matchLifecycleState ==
+            MatchLifecycleState.REOPENING
+        ) {
+            statusText.text =
+                "Operazione in corso"
+
+            eventText.text =
+                "Attendi il completamento"
+            return
+        }
+
+        if (
+            matchLifecycleState ==
+            MatchLifecycleState.FINISHED_BY_ARENA
+        ) {
+            statusText.text =
+                "Partita conclusa"
+
+            eventText.text =
+                "Doppio tap per correggere"
+            return
+        }
+
+        val lifecycleClient =
+            arenaMatchLifecycleClient
+
+        if (lifecycleClient == null) {
+            statusText.text =
+                "Chiusura partita fallita"
+
+            eventText.text =
+                "Seleziona campo Arena"
+            return
+        }
+
+        val selection =
+            arenaCourtSelection
+
+        if (selection == null) {
+            statusText.text =
+                "Chiusura partita fallita"
+
+            eventText.text =
+                "Seleziona campo Arena"
+            return
+        }
+
+        val matchId =
+            currentLiveMatchId
+
+        if (matchId.isNullOrBlank()) {
+            statusText.text =
+                "Chiusura partita fallita"
+
+            eventText.text =
+                "Nessuna partita live"
+            return
+        }
+
+        if (!isCurrentScoreValidForLifecycle()) {
+            statusText.text =
+                "Chiusura partita fallita"
+
+            eventText.text =
+                "Punteggio non valido"
+            return
+        }
+
+        val finishedSnapshot =
+            captureCurrentScoreSnapshot()
+        val finishEventId =
+            UUID.randomUUID().toString()
+        val finishEventSequence =
+            arenaLifecycleSequenceStore.nextSequence()
+        val payload =
+            ArenaMatchLifecycleScoreSnapshot(
+                eventId = finishEventId,
+                eventSequence = finishEventSequence,
+                gamesA = gamesA,
+                gamesB = gamesB,
+                setsA = setsA,
+                setsB = setsB
+            )
+
+        matchLifecycleState =
+            MatchLifecycleState.FINISHING
+        statusText.text =
+            "Chiusura partita..."
+        eventText.text =
+            "Arena"
+        saveMatchLifecycleState()
+        updateScreen()
+
+        lifecycleClient.finishMatch(
+            payload
+        ) { result ->
+            runOnUiThread {
+                logArenaLifecycleResult(
+                    operation = "finish",
+                    result = result,
+                    eventId = payload.eventId,
+                    eventSequence = payload.eventSequence,
+                    matchId = matchId,
+                    gamesA = payload.gamesA,
+                    gamesB = payload.gamesB,
+                    setsA = payload.setsA,
+                    setsB = payload.setsB
+                )
+
+                if (isFinishSuccess(result.status)) {
+                    val resolvedMatchId =
+                        result.match?.matchId
+                            ?.takeIf { value ->
+                                value.isNotBlank()
+                            }
+                            ?: matchId
+
+                    lastFinishedCourtId =
+                        selection.selectedCourtId
+                    lastFinishedMatchId =
+                        resolvedMatchId
+                    lastFinishedSnapshot =
+                        finishedSnapshot
+                    lastFinishEventId =
+                        finishEventId
+                    lastFinishEventSequence =
+                        finishEventSequence
+                    matchLifecycleState =
+                        MatchLifecycleState.FINISHED_BY_ARENA
+
+                    resetLocalScoreSilently()
+                    saveState()
+                    updateScreen()
+
+                    statusText.text =
+                        "Partita conclusa"
+                    eventText.text =
+                        "Doppio tap per correggere"
+                    scoreAnnouncer.announceMessage(
+                        "Partita conclusa"
+                    )
+                    return@runOnUiThread
+                }
+
+                matchLifecycleState =
+                    MatchLifecycleState.ACTIVE
+                saveMatchLifecycleState()
+                updateScreen()
+                statusText.text =
+                    "Chiusura partita fallita"
+                eventText.text =
+                    "Punteggio mantenuto"
+            }
+        }
+    }
+
+    private fun reopenFinishedMatch() {
+        val lifecycleClient =
+            arenaMatchLifecycleClient
+
+        val matchId =
+            lastFinishedMatchId
+
+        val finishedSnapshot =
+            lastFinishedSnapshot
+
+        val selection =
+            arenaCourtSelection
+
+        if (
+            lifecycleClient == null ||
+            selection == null ||
+            matchId.isNullOrBlank() ||
+            finishedSnapshot == null ||
+            selection.selectedCourtId != lastFinishedCourtId
+        ) {
+            statusText.text =
+                "Riapertura partita fallita"
+
+            eventText.text =
+                "Dati partita non disponibili"
+            return
+        }
+
+        val reopenEventId =
+            UUID.randomUUID().toString()
+        val reopenEventSequence =
+            arenaLifecycleSequenceStore.nextSequence()
+
+        matchLifecycleState =
+            MatchLifecycleState.REOPENING
+        statusText.text =
+            "Riapertura partita..."
+        eventText.text =
+            "Arena"
+        saveMatchLifecycleState()
+        updateScreen()
+
+        val reopenRequest =
+            ArenaMatchReopenRequest(
+                eventId = reopenEventId,
+                eventSequence = reopenEventSequence,
+                matchId = matchId
+            )
+
+        lifecycleClient.reopenMatch(
+            reopenRequest
+        ) { result ->
+            runOnUiThread {
+                logArenaLifecycleResult(
+                    operation = "reopen",
+                    result = result,
+                    eventId = reopenRequest.eventId,
+                    eventSequence = reopenRequest.eventSequence,
+                    matchId = reopenRequest.matchId,
+                    gamesA = finishedSnapshot.gamesA,
+                    gamesB = finishedSnapshot.gamesB,
+                    setsA = finishedSnapshot.setsA,
+                    setsB = finishedSnapshot.setsB
+                )
+
+                if (isReopenSuccess(result.status)) {
+                    restoreScoreSnapshot(
+                        finishedSnapshot
+                    )
+                    scoreHistory.clear()
+                    clearMatchLifecycleState()
+                    saveState()
+                    updateScreen()
+
+                    statusText.text =
+                        "Partita riaperta"
+                    eventText.text =
+                        "Undo riparte da questo stato"
+                    scoreAnnouncer.announceMessage(
+                        "Partita riaperta"
+                    )
+                    return@runOnUiThread
+                }
+
+                matchLifecycleState =
+                    MatchLifecycleState.FINISHED_BY_ARENA
+                saveMatchLifecycleState()
+                updateScreen()
+                statusText.text =
+                    "Riapertura partita fallita"
+                eventText.text =
+                    "Partita conclusa"
+            }
+        }
+    }
+
+    private fun logArenaLifecycleResult(
+        operation: String,
+        result: ArenaMatchLifecycleResult,
+        eventId: String,
+        eventSequence: Int,
+        matchId: String?,
+        gamesA: Int,
+        gamesB: Int,
+        setsA: Int,
+        setsB: Int
+    ) {
+        val resolvedStatus =
+            result.status
+                ?: if (result.body == "network_error") {
+                    "network_error"
+                } else {
+                    "unknown"
+                }
+        val resolvedMatchId =
+            result.match?.matchId
+                ?.takeIf { value ->
+                    value.isNotBlank()
+                }
+                ?: matchId.orEmpty()
+
+        Log.i(
+            ARENA_LOG_TAG,
+            "Arena lifecycle $operation result: " +
+                    "status=$resolvedStatus, " +
+                    "http=${result.statusCode}, " +
+                    "eventId=$eventId, " +
+                    "eventSequence=$eventSequence, " +
+                    "matchId=$resolvedMatchId, " +
+                    "gamesA=$gamesA, " +
+                    "gamesB=$gamesB, " +
+                    "setsA=$setsA, " +
+                    "setsB=$setsB, " +
+                    "body=${result.body}"
+        )
+    }
+
+    private fun resetLocalScoreSilently() {
         pointsA = 0
         pointsB = 0
-
         gamesA = 0
         gamesB = 0
-
         setsA = 0
         setsB = 0
-
         advantageSide = null
         killerMode = false
         tieBreakActive = false
         tieBreakPointsA = 0
         tieBreakPointsB = 0
         localMatchFinished = false
-
         scoreHistory.clear()
+    }
+
+    private fun resetLocalScoreWithoutArenaSync(
+        statusMessage: String,
+        eventMessage: String
+    ) {
+        resetLocalScoreSilently()
 
         statusText.text =
-            "Partita azzerata"
+            statusMessage
 
         eventText.text =
-            "Ultimo evento: —"
+            eventMessage
 
         saveState()
         updateScreen()
+    }
+
+    private fun captureCurrentScoreSnapshot(): ScoreSnapshot {
+        return ScoreSnapshot(
+            pointsA = pointsA,
+            pointsB = pointsB,
+            gamesA = gamesA,
+            gamesB = gamesB,
+            setsA = setsA,
+            setsB = setsB,
+            advantageSide = advantageSide,
+            killerMode = killerMode,
+            tieBreakActive = tieBreakActive,
+            tieBreakPointsA = tieBreakPointsA,
+            tieBreakPointsB = tieBreakPointsB,
+            localMatchFinished = localMatchFinished,
+            scoringSide = Side.A
+        )
+    }
+
+    private fun restoreScoreSnapshot(
+        snapshot: ScoreSnapshot
+    ) {
+        pointsA = snapshot.pointsA
+        pointsB = snapshot.pointsB
+        gamesA = snapshot.gamesA
+        gamesB = snapshot.gamesB
+        setsA = snapshot.setsA
+        setsB = snapshot.setsB
+        advantageSide = snapshot.advantageSide
+        killerMode = snapshot.killerMode
+        tieBreakActive = snapshot.tieBreakActive
+        tieBreakPointsA = snapshot.tieBreakPointsA
+        tieBreakPointsB = snapshot.tieBreakPointsB
+        localMatchFinished = snapshot.localMatchFinished
+    }
+
+    private fun clearFinishedLifecycleIfCourtChanged(
+        selectedCourtId: String
+    ) {
+        val finishedCourtId =
+            lastFinishedCourtId
+
+        if (
+            finishedCourtId != null &&
+            finishedCourtId != selectedCourtId
+        ) {
+            clearMatchLifecycleState()
+            saveState()
+        }
+    }
+
+    private fun clearMatchLifecycleState() {
+        matchLifecycleState =
+            MatchLifecycleState.ACTIVE
+        lastFinishedCourtId = null
+        lastFinishedMatchId = null
+        lastFinishedSnapshot = null
+        lastFinishEventId = null
+        lastFinishEventSequence = 0
+    }
+
+    private fun isCurrentScoreValidForLifecycle(): Boolean {
+        return listOf(
+            gamesA,
+            gamesB,
+            setsA,
+            setsB
+        ).all { value ->
+            value in 0..99
+        }
+    }
+
+    private fun isFinishSuccess(
+        status: String?
+    ): Boolean {
+        return status == "finished" ||
+                status == "already_finished" ||
+                status == "duplicate_event"
+    }
+
+    private fun isReopenSuccess(
+        status: String?
+    ): Boolean {
+        return status == "reopened" ||
+                status == "already_reopened" ||
+                status == "duplicate_event"
+    }
+
+    private fun resetMatch() {
+        resetLocalScoreWithoutArenaSync(
+            statusMessage =
+                "Tabellone azzerato",
+            eventMessage =
+                "Ultimo evento: -"
+        )
     }
 
     private fun resetDeviceAssignments() {
@@ -2462,6 +3606,8 @@ class MainActivity : AppCompatActivity() {
         arenaManualExecutor.shutdownNow()
         arenaApiClient?.shutdown()
         arenaLiveMatchClient?.shutdown()
+        arenaLiveScoreAdoptionClient?.shutdown()
+        arenaMatchLifecycleClient?.shutdown()
         scoreAnnouncer.shutdown()
 
         super.onDestroy()
@@ -2476,6 +3622,23 @@ enum class AssignmentMode {
 enum class Side {
     A,
     B
+}
+
+enum class MatchLifecycleState {
+    ACTIVE,
+    FINISHING,
+    FINISHED_BY_ARENA,
+    REOPENING;
+
+    companion object {
+        fun fromStoredValue(
+            value: String?
+        ): MatchLifecycleState {
+            return entries.firstOrNull { state ->
+                state.name == value
+            } ?: ACTIVE
+        }
+    }
 }
 
 data class ParsedShellyPacket(

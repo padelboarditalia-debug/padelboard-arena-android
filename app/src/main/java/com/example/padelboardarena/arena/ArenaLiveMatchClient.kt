@@ -13,6 +13,12 @@ data class ArenaLiveMatch(
     val matchId: String,
     val sideA: ArenaLiveMatchSide,
     val sideB: ArenaLiveMatchSide,
+    val score: String?,
+    val scoreA: Int,
+    val scoreB: Int,
+    val setsA: Int,
+    val setsB: Int,
+    val lastLifecycleEventSequence: Int,
     val status: String?,
     val phase: String?,
     val scoreMode: String?
@@ -51,6 +57,13 @@ data class ArenaLiveMatchResponse(
                         sideB = parseSide(
                             match.jsonObject("sideB")
                         ),
+                        score = match.jsonString("score"),
+                        scoreA = match.jsonNumber("scoreA")?.toInt() ?: 0,
+                        scoreB = match.jsonNumber("scoreB")?.toInt() ?: 0,
+                        setsA = match.jsonNumber("setsA")?.toInt() ?: 0,
+                        setsB = match.jsonNumber("setsB")?.toInt() ?: 0,
+                        lastLifecycleEventSequence =
+                            match.jsonNumber("lastLifecycleEventSequence")?.toInt() ?: 0,
                         status = match.jsonString("status"),
                         phase = match.jsonString("phase"),
                         scoreMode = match.jsonString("scoreMode")

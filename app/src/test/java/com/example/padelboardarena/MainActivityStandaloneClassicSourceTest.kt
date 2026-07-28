@@ -75,6 +75,8 @@ class MainActivityStandaloneClassicSourceTest {
         assertTrue(launcherBody.contains("reloadArenaOperationMode()"))
         assertTrue(launcherBody.contains("ArenaSettingsActivity.REQUEST_RESET_SCORE"))
         assertTrue(launcherBody.contains("resetMatch()"))
+        assertTrue(launcherBody.contains("resetLocalScoreWithoutArenaSync("))
+        assertFalse(launcherBody.contains("Reset locale non disponibile"))
     }
 
     @Test
@@ -195,10 +197,16 @@ class MainActivityStandaloneClassicSourceTest {
     }
 
     @Test
-    fun resetMatchClearsOnlyLocalScoreFields() {
+    fun resetHelperClearsOnlyLocalScoreFields() {
         val source =
             mainActivitySource()
         val resetBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun resetLocalScoreSilently()",
+                endMarker = "private fun captureCurrentScoreSnapshot()"
+            )
+        val resetMatchBody =
             methodSlice(
                 source = source,
                 startMarker = "private fun resetMatch()",
@@ -212,25 +220,43 @@ class MainActivityStandaloneClassicSourceTest {
         assertTrue(resetBody.contains("tieBreakPointsA = 0"))
         assertTrue(resetBody.contains("localMatchFinished = false"))
         assertTrue(resetBody.contains("scoreHistory.clear()"))
+        assertTrue(resetBody.contains("saveState()"))
+        assertTrue(resetBody.contains("updateScreen()"))
+        assertTrue(resetMatchBody.contains("resetLocalScoreWithoutArenaSync("))
         assertFalse(resetBody.contains("enqueueArenaSnapshot("))
         assertFalse(resetBody.contains("arenaRealScoreSync"))
     }
 
     @Test
-    fun longPressFinishAndDoubleTapReopenAreNotImplementedInPhaseA() {
+    fun standaloneModeKeepsLongPressAndDoubleTapLocal() {
         val source =
             mainActivitySource()
-        val eventBody =
+        val longPressBody =
             methodSlice(
                 source = source,
-                startMarker = "private fun handleButtonEvent(",
-                endMarker = "private fun registerPoint("
+                startMarker = "private fun handleLongPress()",
+                endMarker = "private fun assignDevice("
+            )
+        val doublePressBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun handleDoublePress()",
+                endMarker = "private fun handleLongPress()"
             )
 
-        assertTrue(eventBody.contains("ButtonEvent.LONG_PRESS"))
-        assertTrue(eventBody.contains("Nessuna azione configurata"))
-        assertFalse(eventBody.contains("finishMatch"))
-        assertFalse(eventBody.contains("reopen"))
+        assertTrue(longPressBody.contains("if (standaloneClassicMode)"))
+        assertTrue(longPressBody.contains("Nessuna azione configurata"))
+        assertTrue(longPressBody.contains("finishCurrentMatch()"))
+        assertTrue(
+            longPressBody.indexOf("if (standaloneClassicMode)") <
+                    longPressBody.indexOf("finishCurrentMatch()")
+        )
+        assertTrue(doublePressBody.contains("undoLastAction()"))
+        assertTrue(doublePressBody.contains("reopenFinishedMatch()"))
+        assertTrue(
+            doublePressBody.indexOf("undoLastAction()") <
+                    doublePressBody.indexOf("reopenFinishedMatch()")
+        )
     }
 
     private fun mainActivitySource(): String {

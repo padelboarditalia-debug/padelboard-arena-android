@@ -1,0 +1,329 @@
+package com.example.padelboardarena
+
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+class MainActivityMatchLifecycleSourceTest {
+    @Test
+    fun connectedLongPressFinishesAndStandaloneLongPressDoesNotCallBackend() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun handleLongPress()",
+                endMarker = "private fun assignDevice("
+            )
+
+        assertTrue(body.contains("if (standaloneClassicMode)"))
+        assertTrue(body.contains("Nessuna azione configurata"))
+        assertTrue(body.contains("finishCurrentMatch()"))
+        assertTrue(
+            body.indexOf("return") <
+                    body.indexOf("finishCurrentMatch()")
+        )
+    }
+
+    @Test
+    fun doublePressUsesUndoUnlessMatchWasFinishedByArena() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun handleDoublePress()",
+                endMarker = "private fun handleLongPress()"
+            )
+
+        assertTrue(body.contains("if (standaloneClassicMode)"))
+        assertTrue(body.contains("MatchLifecycleState.ACTIVE"))
+        assertTrue(body.contains("undoLastAction()"))
+        assertTrue(body.contains("MatchLifecycleState.FINISHED_BY_ARENA"))
+        assertTrue(body.contains("reopenFinishedMatch()"))
+    }
+
+    @Test
+    fun finishCapturesSnapshotBeforeBackendCallAndResetsOnlyAfterSuccess() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun finishCurrentMatch()",
+                endMarker = "private fun reopenFinishedMatch()"
+            )
+
+        assertTrue(body.contains("val finishedSnapshot"))
+        assertTrue(body.contains("captureCurrentScoreSnapshot()"))
+        assertTrue(body.contains("lifecycleClient.finishMatch("))
+        assertTrue(
+            body.indexOf("captureCurrentScoreSnapshot()") <
+                    body.indexOf("lifecycleClient.finishMatch(")
+        )
+        assertTrue(body.contains("isFinishSuccess(result.status)"))
+        assertTrue(body.contains("resetLocalScoreSilently()"))
+        assertTrue(
+            body.indexOf("isFinishSuccess(result.status)") <
+                    body.indexOf("resetLocalScoreSilently()")
+        )
+    }
+
+    @Test
+    fun finishUsesDedicatedLifecycleSequenceStore() {
+        val source =
+            mainActivitySource()
+        val finishBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun finishCurrentMatch()",
+                endMarker = "private fun reopenFinishedMatch()"
+            )
+        val configureBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun configureArenaCourtClients(",
+                endMarker = "private fun applyLiveMatchResponse("
+            )
+
+        assertTrue(source.contains("private val arenaLifecycleSequenceStore by lazy"))
+        assertTrue(finishBody.contains("arenaLifecycleSequenceStore.nextSequence()"))
+        assertFalse(finishBody.contains("arenaSequenceStore.nextSequence()"))
+        assertTrue(configureBody.contains("sequenceStore ="))
+        assertTrue(configureBody.contains("arenaSequenceStore"))
+    }
+
+    @Test
+    fun reopenUsesDedicatedLifecycleSequenceAndRestoresFinishedSnapshot() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun reopenFinishedMatch()",
+                endMarker = "private fun resetLocalScoreSilently()"
+            )
+
+        assertTrue(body.contains("arenaLifecycleSequenceStore.nextSequence()"))
+        assertFalse(body.contains("arenaSequenceStore.nextSequence()"))
+        assertTrue(body.contains("lifecycleClient.reopenMatch("))
+        assertTrue(
+            Regex(
+                """restoreScoreSnapshot\s*\(\s*finishedSnapshot\s*\)"""
+            ).containsMatchIn(body)
+        )
+        assertTrue(body.contains("scoreHistory.clear()"))
+        assertTrue(body.contains("clearMatchLifecycleState()"))
+    }
+
+    @Test
+    fun liveMatchResponseAlignsLifecycleSequenceBeforeFinishOrReopen() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun applyLiveMatchResponse(",
+                endMarker = "private fun updateTeamLabels("
+            )
+
+        assertTrue(body.contains("arenaLifecycleSequenceStore.advanceToAtLeast("))
+        assertTrue(body.contains("match.lastLifecycleEventSequence"))
+        assertTrue(
+            body.indexOf("arenaLifecycleSequenceStore.advanceToAtLeast(") <
+                    body.indexOf("currentLiveMatchId")
+        )
+    }
+
+    @Test
+    fun lifecycleDiagnosticsLogBackendResponseWithoutChangingUiMessages() {
+        val source =
+            mainActivitySource()
+        val finishBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun finishCurrentMatch()",
+                endMarker = "private fun reopenFinishedMatch()"
+            )
+        val reopenBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun reopenFinishedMatch()",
+                endMarker = "private fun logArenaLifecycleResult("
+            )
+        val logBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun logArenaLifecycleResult(",
+                endMarker = "private fun resetLocalScoreSilently()"
+            )
+
+        assertTrue(finishBody.contains("logArenaLifecycleResult("))
+        assertTrue(finishBody.contains("operation = \"finish\""))
+        assertTrue(reopenBody.contains("logArenaLifecycleResult("))
+        assertTrue(reopenBody.contains("operation = \"reopen\""))
+        assertTrue(logBody.contains("result.statusCode"))
+        assertTrue(logBody.contains("result.body"))
+        assertTrue(logBody.contains("eventId"))
+        assertTrue(logBody.contains("eventSequence"))
+        assertTrue(logBody.contains("matchId"))
+        assertTrue(logBody.contains("gamesA"))
+        assertTrue(logBody.contains("gamesB"))
+        assertTrue(logBody.contains("setsA"))
+        assertTrue(logBody.contains("setsB"))
+        assertTrue(logBody.contains("network_error"))
+        assertFalse(logBody.contains("Authorization"))
+        assertFalse(logBody.contains("accessToken"))
+        assertFalse(logBody.contains("refreshToken"))
+        assertFalse(logBody.contains("password"))
+        assertTrue(finishBody.contains("\"Partita conclusa\""))
+        assertTrue(finishBody.contains("\"Chiusura partita fallita\""))
+        assertTrue(reopenBody.contains("\"Partita riaperta\""))
+        assertTrue(reopenBody.contains("\"Riapertura partita fallita\""))
+    }
+
+    @Test
+    fun lifecycleStatePersistsEnoughDataForReopenAfterRestart() {
+        val source =
+            mainActivitySource()
+        val loadBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun loadMatchLifecycleState()",
+                endMarker = "private fun saveMatchLifecycleState()"
+            )
+        assertTrue(source.contains("PREF_LAST_FINISHED_COURT_ID"))
+        assertTrue(source.contains("PREF_LAST_FINISHED_MATCH_ID"))
+        assertTrue(source.contains("PREF_LAST_FINISH_EVENT_ID"))
+        assertTrue(source.contains("PREF_LAST_FINISH_EVENT_SEQUENCE"))
+        assertTrue(source.contains("PREF_LAST_FINISHED_GAMES_A"))
+        assertTrue(source.contains("PREF_LAST_FINISHED_GAMES_B"))
+        assertTrue(source.contains("PREF_LAST_FINISHED_SETS_A"))
+        assertTrue(source.contains("PREF_LAST_FINISHED_SETS_B"))
+        assertTrue(loadBody.contains("lastFinishedSnapshot ="))
+        assertTrue(source.contains("private fun saveLastFinishedSnapshot()"))
+        assertTrue(source.contains("val snapshot ="))
+    }
+
+    @Test
+    fun resetLocalScoreSilentlyDoesNotPostArenaSnapshotOrTouchSync() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun resetLocalScoreSilently()",
+                endMarker = "private fun captureCurrentScoreSnapshot()"
+            )
+
+        assertTrue(body.contains("pointsA = 0"))
+        assertTrue(body.contains("gamesA = 0"))
+        assertTrue(body.contains("setsA = 0"))
+        assertTrue(body.contains("scoreHistory.clear()"))
+        assertFalse(body.contains("enqueueArenaSnapshot("))
+        assertFalse(body.contains("arenaRealScoreSync"))
+        assertFalse(body.contains("ArenaRealScoreSync"))
+    }
+
+    @Test
+    fun connectedPointEventsAreIgnoredWhileLifecycleIsNotActive() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun registerPoint(",
+                endMarker = "private fun announceValidPoint("
+            )
+
+        assertTrue(
+            Regex(
+                """matchLifecycleState\s*!=\s*MatchLifecycleState\.ACTIVE"""
+            ).containsMatchIn(body)
+        )
+        assertTrue(body.contains("Operazione in corso"))
+        val lifecycleGuardIndex =
+            Regex(
+                """matchLifecycleState\s*!=\s*MatchLifecycleState\.ACTIVE"""
+            ).find(body)?.range?.first ?: -1
+
+        assertTrue(
+            lifecycleGuardIndex >= 0
+        )
+        assertTrue(
+            lifecycleGuardIndex <
+                    body.indexOf("saveSnapshot(")
+        )
+    }
+
+    @Test
+    fun lifecycleDoesNotModifyBleParsingOrMatchingContracts() {
+        val source =
+            mainActivitySource()
+        val parseBody =
+            methodSlice(
+                source = source,
+            startMarker = "private fun parseShellyPacket(",
+            endMarker = "private fun handleButtonEvent("
+            )
+        val assignmentBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun beginAssignment(",
+                endMarker = "private fun parseShellyPacket("
+            )
+
+        assertFalse(parseBody.contains("MatchLifecycle"))
+        assertFalse(parseBody.contains("finishCurrentMatch"))
+        assertFalse(parseBody.contains("reopenFinishedMatch"))
+        assertFalse(assignmentBody.contains("MatchLifecycle"))
+    }
+
+    @Test
+    fun finishReopenClientIsNotInjectedIntoArenaRealScoreSync() {
+        val source =
+            File(
+                "src/main/java/com/example/padelboardarena/arena/ArenaRealScoreSync.kt"
+            ).readText()
+
+        assertFalse(source.contains("ArenaMatchLifecycleClient"))
+        assertFalse(source.contains("finish-match"))
+        assertFalse(source.contains("reopen-match"))
+    }
+
+    @Test
+    fun lifecycleEnumContainsRequestedStates() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "enum class MatchLifecycleState",
+                endMarker = "data class ParsedShellyPacket("
+            )
+
+        assertTrue(body.contains("ACTIVE"))
+        assertTrue(body.contains("FINISHING"))
+        assertTrue(body.contains("FINISHED_BY_ARENA"))
+        assertTrue(body.contains("REOPENING"))
+    }
+
+    private fun mainActivitySource(): String {
+        return File(
+            "src/main/java/com/example/padelboardarena/MainActivity.kt"
+        ).readText()
+    }
+
+    private fun methodSlice(
+        source: String,
+        startMarker: String,
+        endMarker: String
+    ): String {
+        val start =
+            source.indexOf(
+                startMarker
+            )
+        val end =
+            source.indexOf(
+                endMarker,
+                start
+            )
+
+        assertTrue(
+            start >= 0
+        )
+        assertTrue(
+            end > start
+        )
+
+        return source.substring(
+            start,
+            end
+        )
+    }
+}

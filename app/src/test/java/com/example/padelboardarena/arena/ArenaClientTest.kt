@@ -202,6 +202,12 @@ class ArenaClientTest {
         assertEquals("match-1", response.match?.matchId)
         assertEquals("Pippo / Pluto", response.match?.sideA?.label)
         assertEquals("Minny / Topolino", response.match?.sideB?.label)
+        assertEquals("8-5", response.match?.score)
+        assertEquals(8, response.match?.scoreA)
+        assertEquals(5, response.match?.scoreB)
+        assertEquals(0, response.match?.setsA)
+        assertEquals(0, response.match?.setsB)
+        assertEquals(1001, response.match?.lastLifecycleEventSequence)
         assertEquals("playing", response.match?.status)
         assertEquals("Set 1", response.match?.phase)
         assertEquals("game", response.match?.scoreMode)
@@ -230,6 +236,37 @@ class ArenaClientTest {
         assertTrue(result.success)
         assertNull(response.match)
         assertEquals("no_live_match", response.reason)
+    }
+
+    @Test
+    fun liveMatchParsesNullScoreAsZeroValues() {
+        val result =
+            ArenaLiveMatchResult.fromHttp(
+                statusCode = 200,
+                body = "{" +
+                        "\"ok\":true," +
+                        "\"courtId\":\"court-1\"," +
+                        "\"arenaCourtLabel\":\"Campo Arena 1\"," +
+                        "\"tournamentCourtName\":\"Campo 1\"," +
+                        "\"match\":{" +
+                        "\"matchId\":\"match-1\"," +
+                        "\"sideA\":{\"label\":\"Squadra A\"}," +
+                        "\"sideB\":{\"label\":\"Squadra B\"}," +
+                        "\"score\":null," +
+                        "\"status\":\"playing\"," +
+                        "\"phase\":\"Set 1\"," +
+                        "\"scoreMode\":\"game\"" +
+                        "}," +
+                        "\"reason\":null" +
+                        "}"
+            )
+
+        assertTrue(result.success)
+        assertNull(result.response?.match?.score)
+        assertEquals(0, result.response?.match?.scoreA)
+        assertEquals(0, result.response?.match?.scoreB)
+        assertEquals(0, result.response?.match?.setsA)
+        assertEquals(0, result.response?.match?.setsB)
     }
 
     @Test
@@ -505,6 +542,12 @@ class ArenaClientTest {
                 "\"label\":\"Minny / Topolino\"," +
                 "\"teamId\":\"team-b\"" +
                 "}," +
+                "\"score\":\"8-5\"," +
+                "\"scoreA\":8," +
+                "\"scoreB\":5," +
+                "\"setsA\":0," +
+                "\"setsB\":0," +
+                "\"lastLifecycleEventSequence\":1001," +
                 "\"status\":\"playing\"," +
                 "\"phase\":\"Set 1\"," +
                 "\"scoreMode\":\"game\"" +

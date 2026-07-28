@@ -218,6 +218,16 @@ class ArenaSettingsSourceTest {
         )
         assertTrue(
             launcherBody.contains(
+                "handleSettingsAssignmentRequest("
+            )
+        )
+        assertTrue(
+            source.contains(
+                "private fun handleSettingsAssignmentRequest("
+            )
+        )
+        assertTrue(
+            source.contains(
                 "requestShellyAssignment("
             )
         )

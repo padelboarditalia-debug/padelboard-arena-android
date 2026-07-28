@@ -118,6 +118,18 @@ class ArenaScoreSpeechFormatter(
 
     }
 
+    fun formatGameCorrection(
+
+        state: ArenaScoreSpeechState,
+
+        correctedSide: Side
+
+    ): String {
+
+        return "Correzione. Game ${teamLabel(correctedSide)}. ${gameScorePhrase(state)}"
+
+    }
+
     private fun scorePhrase(
 
         state: ArenaScoreSpeechState

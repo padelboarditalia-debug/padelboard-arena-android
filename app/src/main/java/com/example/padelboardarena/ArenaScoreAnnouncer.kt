@@ -82,6 +82,18 @@ class ArenaScoreAnnouncer(
         )
     }
 
+    fun announceGameCorrection(
+        state: ArenaScoreSpeechState,
+        correctedSide: Side
+    ) {
+        speak(
+            formatter.formatGameCorrection(
+                state = state,
+                correctedSide = correctedSide
+            )
+        )
+    }
+
     fun announceMessage(
         message: String
     ) {

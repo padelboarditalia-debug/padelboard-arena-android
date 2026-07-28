@@ -32,6 +32,48 @@ class ArenaManualFeatureTest {
     }
 
     @Test
+    fun lifecycleSequenceAdvancesToBackendBaselineWithoutGoingBackwards() {
+        var savedSequence = 382
+
+        val store =
+            PersistedArenaLifecycleSequenceStore(
+                readSequence = { savedSequence },
+                writeSequence = { sequence ->
+                    savedSequence = sequence
+                }
+            )
+
+        store.advanceToAtLeast(
+            1001
+        )
+
+        assertEquals(1002, store.nextSequence())
+        store.advanceToAtLeast(
+            1001
+        )
+        assertEquals(1003, store.nextSequence())
+    }
+
+    @Test
+    fun lifecycleSequenceKeepsLocalValueWhenBackendIsOlder() {
+        var savedSequence = 1200
+
+        val store =
+            PersistedArenaLifecycleSequenceStore(
+                readSequence = { savedSequence },
+                writeSequence = { sequence ->
+                    savedSequence = sequence
+                }
+            )
+
+        store.advanceToAtLeast(
+            1001
+        )
+
+        assertEquals(1201, store.nextSequence())
+    }
+
+    @Test
     fun manualSnapshotIncrementsSequenceOnce() {
         var sequence = 0
         var writeCount = 0

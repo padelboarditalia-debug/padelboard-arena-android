@@ -348,6 +348,52 @@ class ArenaScoreSpeechFormatterTest {
 
     @Test
 
+    fun gameCorrectionUsesCorrectionPrefixAndTeamLabel() {
+
+        val customFormatter =
+
+            ArenaScoreSpeechFormatter(
+
+                teamALabel = "Pippo / Pluto",
+
+                teamBLabel = "Minny / Topolino"
+
+            )
+
+        val phrase =
+
+            customFormatter.formatGameCorrection(
+
+                state = ArenaScoreSpeechState(
+
+                    pointsA = 2,
+
+                    pointsB = 1,
+
+                    gamesA = 7,
+
+                    gamesB = 5,
+
+                    advantageSide = null
+
+                ),
+
+                correctedSide = Side.A
+
+            )
+
+        assertEquals(
+
+            "Correzione. Game Pippo / Pluto. Sette a Cinque",
+
+            phrase
+
+        )
+
+    }
+
+    @Test
+
     fun tieBreakScoreIsAnnouncedAsNumericPoints() {
 
         val phrase =

@@ -334,6 +334,79 @@ class MainActivityScoreboardSourceTest {
     }
 
     @Test
+    fun triplePressDelegatesToGameCorrection() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun handleButtonEvent(",
+                endMarker = "private fun correctGameForSide("
+            )
+
+        assertTrue(body.contains("ButtonEvent.TRIPLE_PRESS"))
+        assertTrue(body.contains("correctGameForSide(side)"))
+        assertFalse(body.contains("finishCurrentMatch()"))
+        assertFalse(body.contains("reopenFinishedMatch()"))
+    }
+
+    @Test
+    fun gameCorrectionChangesOnlyOneGameAndKeepsPointStateUntouched() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun correctGameForSide(",
+                endMarker = "private fun handleDoublePress()"
+            )
+
+        assertTrue(body.contains("matchLifecycleState !="))
+        assertTrue(body.contains("MatchLifecycleState.ACTIVE"))
+        assertTrue(body.contains("localMatchFinished"))
+        assertTrue(body.contains("currentGames <= 0"))
+        assertTrue(body.contains("Nessun game da correggere"))
+        assertTrue(
+            body.indexOf("currentGames <= 0") <
+                    body.indexOf("saveSnapshot(")
+        )
+        assertTrue(body.contains("gamesA - 1"))
+        assertTrue(body.contains("gamesB - 1"))
+        assertTrue(body.contains("coerceAtLeast("))
+        assertTrue(body.contains("saveSnapshot("))
+        assertTrue(body.contains("saveStateUpdateScreenAndEnqueueArenaSnapshot()"))
+        assertTrue(body.contains("saveState()"))
+        assertTrue(body.contains("animateGameCorrectionChange("))
+        assertTrue(body.contains("announceGameCorrection("))
+        assertFalse(Regex("""pointsA\s*=""").containsMatchIn(body))
+        assertFalse(Regex("""pointsB\s*=""").containsMatchIn(body))
+        assertFalse(Regex("""setsA\s*=""").containsMatchIn(body))
+        assertFalse(Regex("""setsB\s*=""").containsMatchIn(body))
+        assertFalse(Regex("""tieBreakActive\s*=""").containsMatchIn(body))
+        assertFalse(Regex("""tieBreakPointsA\s*=""").containsMatchIn(body))
+        assertFalse(Regex("""tieBreakPointsB\s*=""").containsMatchIn(body))
+        assertFalse(body.contains("finishCurrentMatch("))
+        assertFalse(body.contains("reopenFinishedMatch("))
+    }
+
+    @Test
+    fun gameCorrectionUsesSeparateRedGameAnimation() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun animateGameCorrectionChange(",
+                endMarker = "private fun animateScoreChange("
+            )
+
+        assertTrue(body.contains("gamesAText"))
+        assertTrue(body.contains("gamesBText"))
+        assertTrue(body.contains("gameAnimationA"))
+        assertTrue(body.contains("gameAnimationB"))
+        assertTrue(body.contains("undoFlashColor"))
+        assertTrue(body.contains("standardColor"))
+        assertFalse(body.contains("scoreAText"))
+        assertFalse(body.contains("scoreBText"))
+        assertFalse(body.contains("enqueueArenaSnapshot("))
+        assertFalse(body.contains("registerPoint("))
+    }
+
+    @Test
     fun emptyUndoReturnsBeforeAnimation() {
         val undoBody =
             methodSlice(
