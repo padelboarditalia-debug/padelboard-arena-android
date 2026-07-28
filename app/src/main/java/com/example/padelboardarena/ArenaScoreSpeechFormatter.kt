@@ -10,7 +10,9 @@ data class ArenaScoreSpeechState(
 
     val gamesB: Int,
 
-    val advantageSide: Side?
+    val advantageSide: Side?,
+
+    val tieBreakActive: Boolean = false
 
 )
 
@@ -125,6 +127,10 @@ class ArenaScoreSpeechFormatter(
         val advantageSide =
 
             state.advantageSide
+
+        if (state.tieBreakActive) {
+            return "${numberWord(state.pointsA)} a ${numberWord(state.pointsB)}"
+        }
 
         if (advantageSide != null) {
 

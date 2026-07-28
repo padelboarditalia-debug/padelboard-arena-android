@@ -50,6 +50,14 @@
         android:paddingTop="24dp"
         android:paddingBottom="12dp" />
 
+    <CheckBox
+        android:id="@+id/arenaSettingsStandaloneClassicModeCheckBox"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="48dp"
+        android:text="Modalità autonoma Game classico"
+        android:textSize="16sp" />
+
     <TextView
         android:id="@+id/arenaSettingsCourtStatusText"
         android:layout_width="match_parent"
@@ -63,6 +71,12 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Seleziona campo" />
+
+    <Button
+        android:id="@+id/arenaSettingsResetScoreButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Azzera punteggio" />
 
     <TextView
         android:id="@+id/arenaSettingsShellyTitleText"

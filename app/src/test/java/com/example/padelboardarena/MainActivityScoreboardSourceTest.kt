@@ -295,7 +295,7 @@ class MainActivityScoreboardSourceTest {
             methodSlice(
                 source = mainActivitySource(),
                 startMarker = "private fun registerPoint(",
-                endMarker = "private fun winGame("
+                endMarker = "private fun announceValidPoint("
             )
 
         val stateUpdateCount =

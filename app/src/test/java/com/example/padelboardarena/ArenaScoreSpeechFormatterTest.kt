@@ -348,6 +348,48 @@ class ArenaScoreSpeechFormatterTest {
 
     @Test
 
+    fun tieBreakScoreIsAnnouncedAsNumericPoints() {
+
+        val phrase =
+
+            formatter.formatPoint(
+
+                state = ArenaScoreSpeechState(
+
+                    pointsA = 7,
+
+                    pointsB = 6,
+
+                    gamesA = 6,
+
+                    gamesB = 6,
+
+                    advantageSide = null,
+
+                    tieBreakActive = true
+
+                ),
+
+                scoringSide = Side.A,
+
+                previousGamesA = 6,
+
+                previousGamesB = 6
+
+            )
+
+        assertEquals(
+
+            "Sette a Sei",
+
+            phrase
+
+        )
+
+    }
+
+    @Test
+
     fun formatterDoesNotExposeTechnicalData() {
 
         val source =

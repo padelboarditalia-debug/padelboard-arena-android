@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
@@ -16,6 +17,7 @@ import com.example.padelboardarena.arena.ArenaCourtSelection
 import com.example.padelboardarena.arena.ArenaCourtSelectionStore
 import com.example.padelboardarena.arena.ArenaCourtsClient
 import com.example.padelboardarena.arena.ArenaManualUiMessages
+import com.example.padelboardarena.arena.ArenaOperationModeStore
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -26,6 +28,8 @@ class ArenaSettingsActivity : AppCompatActivity() {
         const val REQUEST_ASSIGN_SIDE_A = "ASSIGN_SIDE_A"
         const val REQUEST_ASSIGN_SIDE_B = "ASSIGN_SIDE_B"
         const val REQUEST_COURT_CHANGED = "COURT_CHANGED"
+        const val REQUEST_OPERATION_MODE_CHANGED = "OPERATION_MODE_CHANGED"
+        const val REQUEST_RESET_SCORE = "RESET_SCORE"
 
         private const val PREFS_NAME = "padelboard_arena"
         private const val PREF_DEVICE_A = "device_a"
@@ -38,7 +42,9 @@ class ArenaSettingsActivity : AppCompatActivity() {
     private lateinit var loginButton: Button
     private lateinit var statusText: TextView
     private lateinit var courtStatusText: TextView
+    private lateinit var standaloneClassicModeCheckBox: CheckBox
     private lateinit var selectCourtButton: Button
+    private lateinit var resetScoreButton: Button
     private lateinit var deviceAStatusText: TextView
     private lateinit var deviceBStatusText: TextView
     private lateinit var assignAButton: Button
@@ -75,6 +81,12 @@ class ArenaSettingsActivity : AppCompatActivity() {
         )
     }
 
+    private val arenaOperationModeStore by lazy {
+        ArenaOperationModeStore(
+            this
+        )
+    }
+
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
@@ -82,6 +94,7 @@ class ArenaSettingsActivity : AppCompatActivity() {
         setContentView(R.layout.activity_arena_settings)
 
         bindViews()
+        updateOperationModeUi()
         updateCourtSelectionUi()
         updateShellyAssignmentUi()
 
@@ -91,6 +104,24 @@ class ArenaSettingsActivity : AppCompatActivity() {
 
         selectCourtButton.setOnClickListener {
             loadArenaCourtsForSelection()
+        }
+
+        standaloneClassicModeCheckBox.setOnCheckedChangeListener { _, checked ->
+            arenaOperationModeStore.setStandaloneClassicMode(
+                checked
+            )
+            updateCourtSelectionUi()
+            setResult(
+                RESULT_OK,
+                Intent().putExtra(
+                    EXTRA_SETTINGS_REQUEST,
+                    REQUEST_OPERATION_MODE_CHANGED
+                )
+            )
+        }
+
+        resetScoreButton.setOnClickListener {
+            confirmResetScore()
         }
 
         assignAButton.setOnClickListener {
@@ -123,8 +154,14 @@ class ArenaSettingsActivity : AppCompatActivity() {
         courtStatusText =
             findViewById(R.id.arenaSettingsCourtStatusText)
 
+        standaloneClassicModeCheckBox =
+            findViewById(R.id.arenaSettingsStandaloneClassicModeCheckBox)
+
         selectCourtButton =
             findViewById(R.id.arenaSettingsSelectCourtButton)
+
+        resetScoreButton =
+            findViewById(R.id.arenaSettingsResetScoreButton)
 
         deviceAStatusText =
             findViewById(R.id.arenaSettingsDeviceAStatusText)
@@ -142,7 +179,21 @@ class ArenaSettingsActivity : AppCompatActivity() {
             findViewById(R.id.arenaSettingsBackButton)
     }
 
+    private fun updateOperationModeUi() {
+        standaloneClassicModeCheckBox.isChecked =
+            arenaOperationModeStore.isStandaloneClassicMode()
+    }
+
     private fun updateCourtSelectionUi() {
+        if (arenaOperationModeStore.isStandaloneClassicMode()) {
+            courtStatusText.text =
+                "Modalità autonoma\nCollegamento PadelBoard disattivato"
+            selectCourtButton.isEnabled = false
+            return
+        }
+
+        selectCourtButton.isEnabled = true
+
         val selection =
             arenaCourtSelectionStore.readSelection()
                 ?: fallbackArenaCourtSelection()
@@ -187,6 +238,11 @@ class ArenaSettingsActivity : AppCompatActivity() {
     }
 
     private fun loadArenaCourtsForSelection() {
+        if (arenaOperationModeStore.isStandaloneClassicMode()) {
+            updateCourtSelectionUi()
+            return
+        }
+
         selectCourtButton.isEnabled = false
         courtStatusText.text =
             "Caricamento campi Arena"
@@ -370,6 +426,32 @@ class ArenaSettingsActivity : AppCompatActivity() {
         )
 
         finish()
+    }
+
+    private fun confirmResetScore() {
+        AlertDialog.Builder(
+            this
+        )
+            .setMessage(
+                "Azzera completamente il tabellone?"
+            )
+            .setNegativeButton(
+                "Annulla",
+                null
+            )
+            .setPositiveButton(
+                "Azzera"
+            ) { _, _ ->
+                setResult(
+                    RESULT_OK,
+                    Intent().putExtra(
+                        EXTRA_SETTINGS_REQUEST,
+                        REQUEST_RESET_SCORE
+                    )
+                )
+                finish()
+            }
+            .show()
     }
 
     private fun runArenaLogin() {

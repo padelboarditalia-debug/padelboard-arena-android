@@ -42,6 +42,7 @@ import com.example.padelboardarena.arena.ArenaCourtSelectionStore
 import com.example.padelboardarena.arena.ArenaLiveMatchClient
 import com.example.padelboardarena.arena.ArenaLiveMatchResponse
 import com.example.padelboardarena.arena.ArenaManualUiMessages
+import com.example.padelboardarena.arena.ArenaOperationModeStore
 import com.example.padelboardarena.arena.ArenaRealScoreSnapshotFactory
 import com.example.padelboardarena.arena.ArenaRealScoreState
 import com.example.padelboardarena.arena.ArenaRealScoreSync
@@ -65,6 +66,12 @@ class MainActivity : AppCompatActivity() {
 
         private const val PREF_GAMES_A = "games_a"
         private const val PREF_GAMES_B = "games_b"
+        private const val PREF_SETS_A = "sets_a"
+        private const val PREF_SETS_B = "sets_b"
+        private const val PREF_TIE_BREAK_ACTIVE = "tie_break_active"
+        private const val PREF_TIE_BREAK_POINTS_A = "tie_break_points_a"
+        private const val PREF_TIE_BREAK_POINTS_B = "tie_break_points_b"
+        private const val PREF_LOCAL_MATCH_FINISHED = "local_match_finished"
 
         private const val PREF_ADVANTAGE_SIDE = "advantage_side"
         private const val PREF_KILLER_MODE = "killer_mode"
@@ -191,9 +198,16 @@ class MainActivity : AppCompatActivity() {
 
     private var gamesA = 0
     private var gamesB = 0
+    private var setsA = 0
+    private var setsB = 0
 
     private var advantageSide: Side? = null
     private var killerMode = false
+    private var tieBreakActive = false
+    private var tieBreakPointsA = 0
+    private var tieBreakPointsB = 0
+    private var localMatchFinished = false
+    private var standaloneClassicMode = false
 
     private var assignmentMode: AssignmentMode? = null
     private var assignmentArmedAt = 0L
@@ -240,6 +254,12 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private val arenaOperationModeStore by lazy {
+        ArenaOperationModeStore(
+            preferences
+        )
+    }
+
     private val arenaAuthClient by lazy {
         ArenaAuthClient(
             config = arenaConfig,
@@ -263,6 +283,7 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
+            reloadArenaOperationMode()
             reloadArenaCourtSelection()
             bootstrapArenaSession()
 
@@ -280,6 +301,9 @@ class MainActivity : AppCompatActivity() {
                     requestShellyAssignment(
                         AssignmentMode.SIDE_B
                     )
+
+                ArenaSettingsActivity.REQUEST_RESET_SCORE ->
+                    resetMatch()
             }
         }
 
@@ -317,6 +341,7 @@ class MainActivity : AppCompatActivity() {
             ArenaScoreAnnouncer(
                 this
             )
+        reloadArenaOperationMode()
         loadSavedData()
         updateScreen()
         reloadArenaCourtSelection()
@@ -332,7 +357,9 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         activityVisible = true
-        startLiveMatchPolling()
+        if (!standaloneClassicMode) {
+            startLiveMatchPolling()
+        }
     }
 
     override fun onStop() {
@@ -398,6 +425,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bootstrapArenaSession() {
+        if (standaloneClassicMode) {
+            arenaConnectionStatusText.text =
+                "Modalità autonoma"
+            arenaLastCallText.text =
+                "Modalità autonoma"
+            return
+        }
+
         arenaConnectionStatusText.text =
             "Arena: ripristino sessione"
 
@@ -433,6 +468,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startLiveMatchPolling() {
+        if (standaloneClassicMode) {
+            liveMatchPollingActive = false
+            arenaLastCallText.text =
+                "Modalità autonoma"
+            return
+        }
+
         if (arenaCourtSelection == null || arenaLiveMatchClient == null) {
             liveMatchPollingActive = false
             arenaLastCallText.text =
@@ -466,6 +508,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshLiveMatchIfNeeded() {
+        if (standaloneClassicMode) {
+            return
+        }
+
         if (liveMatchRequestInFlight) {
             return
         }
@@ -513,6 +559,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun reloadArenaCourtSelection() {
+        if (standaloneClassicMode) {
+            configureArenaCourtClients(
+                null
+            )
+            return
+        }
+
         val selection =
             arenaCourtSelectionStore.readSelection()
                 ?: fallbackArenaCourtSelection()
@@ -520,6 +573,11 @@ class MainActivity : AppCompatActivity() {
         configureArenaCourtClients(
             selection
         )
+    }
+
+    private fun reloadArenaOperationMode() {
+        standaloneClassicMode =
+            arenaOperationModeStore.isStandaloneClassicMode()
     }
 
     private fun fallbackArenaCourtSelection(): ArenaCourtSelection? {
@@ -547,6 +605,22 @@ class MainActivity : AppCompatActivity() {
 
         arenaApiClient?.shutdown()
         arenaLiveMatchClient?.shutdown()
+
+        if (standaloneClassicMode) {
+            arenaCourtSelection = null
+            arenaApiClient = null
+            arenaLiveMatchClient = null
+            arenaRealScoreSync = null
+            updateTeamLabels(
+                DEFAULT_TEAM_A_LABEL,
+                DEFAULT_TEAM_B_LABEL
+            )
+            arenaConnectionStatusText.text =
+                "Modalità autonoma"
+            arenaLastCallText.text =
+                "Modalità autonoma"
+            return
+        }
 
         arenaCourtSelection =
             selection
@@ -628,6 +702,10 @@ class MainActivity : AppCompatActivity() {
     private fun applyLiveMatchResponse(
         response: ArenaLiveMatchResponse
     ) {
+        if (standaloneClassicMode) {
+            return
+        }
+
         val match =
             response.match
 
@@ -768,6 +846,16 @@ class MainActivity : AppCompatActivity() {
             0
         )
 
+        setsA = preferences.getInt(
+            PREF_SETS_A,
+            0
+        )
+
+        setsB = preferences.getInt(
+            PREF_SETS_B,
+            0
+        )
+
         advantageSide =
             when (
                 preferences.getString(
@@ -783,6 +871,30 @@ class MainActivity : AppCompatActivity() {
         killerMode =
             preferences.getBoolean(
                 PREF_KILLER_MODE,
+                false
+            )
+
+        tieBreakActive =
+            preferences.getBoolean(
+                PREF_TIE_BREAK_ACTIVE,
+                false
+            )
+
+        tieBreakPointsA =
+            preferences.getInt(
+                PREF_TIE_BREAK_POINTS_A,
+                0
+            )
+
+        tieBreakPointsB =
+            preferences.getInt(
+                PREF_TIE_BREAK_POINTS_B,
+                0
+            )
+
+        localMatchFinished =
+            preferences.getBoolean(
+                PREF_LOCAL_MATCH_FINISHED,
                 false
             )
     }
@@ -813,6 +925,14 @@ class MainActivity : AppCompatActivity() {
                 PREF_GAMES_B,
                 gamesB
             )
+            .putInt(
+                PREF_SETS_A,
+                setsA
+            )
+            .putInt(
+                PREF_SETS_B,
+                setsB
+            )
             .putString(
                 PREF_ADVANTAGE_SIDE,
                 advantageSide?.name
@@ -820,6 +940,22 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(
                 PREF_KILLER_MODE,
                 killerMode
+            )
+            .putBoolean(
+                PREF_TIE_BREAK_ACTIVE,
+                tieBreakActive
+            )
+            .putInt(
+                PREF_TIE_BREAK_POINTS_A,
+                tieBreakPointsA
+            )
+            .putInt(
+                PREF_TIE_BREAK_POINTS_B,
+                tieBreakPointsB
+            )
+            .putBoolean(
+                PREF_LOCAL_MATCH_FINISHED,
+                localMatchFinished
             )
             .apply()
     }
@@ -856,10 +992,10 @@ class MainActivity : AppCompatActivity() {
             gamesB.toString()
 
         setsAText.text =
-            "0"
+            setsA.toString()
 
         setsBText.text =
-            "0"
+            setsB.toString()
 
         deviceAText.text =
             deviceA?.let { identifier ->
@@ -873,6 +1009,18 @@ class MainActivity : AppCompatActivity() {
 
         phaseText.text =
             when {
+                standaloneClassicMode ->
+                    when {
+                        localMatchFinished ->
+                            "Partita conclusa"
+
+                        tieBreakActive ->
+                            "TIE-BREAK"
+
+                        else ->
+                            "Modalità autonoma"
+                    }
+
                 killerMode ->
                     "KILLER: il prossimo punto vince il game"
 
@@ -935,6 +1083,13 @@ class MainActivity : AppCompatActivity() {
     private fun displayPointForSide(
         side: Side
     ): String {
+        if (tieBreakActive) {
+            return when (side) {
+                Side.A -> tieBreakPointsA
+                Side.B -> tieBreakPointsB
+            }.toString()
+        }
+
         if (advantageSide == side) {
             return "ADV"
         }
@@ -964,6 +1119,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enqueueArenaSnapshot() {
+        if (standaloneClassicMode) {
+            arenaLastCallText.text =
+                "Modalità autonoma"
+            return
+        }
+
         val sync =
             arenaRealScoreSync
 
@@ -1779,6 +1940,13 @@ class MainActivity : AppCompatActivity() {
     private fun registerPoint(
         scoringSide: Side
     ) {
+        if (standaloneClassicMode) {
+            registerStandaloneClassicPoint(
+                scoringSide
+            )
+            return
+        }
+
         saveSnapshot(
             scoringSide
         )
@@ -1981,12 +2149,142 @@ class MainActivity : AppCompatActivity() {
 
     private fun currentSpeechState(): ArenaScoreSpeechState {
         return ArenaScoreSpeechState(
+            pointsA = if (tieBreakActive) tieBreakPointsA else pointsA,
+            pointsB = if (tieBreakActive) tieBreakPointsB else pointsB,
+            gamesA = gamesA,
+            gamesB = gamesB,
+            advantageSide = advantageSide,
+            tieBreakActive = tieBreakActive
+        )
+    }
+
+    private fun registerStandaloneClassicPoint(
+        scoringSide: Side
+    ) {
+        if (localMatchFinished) {
+            statusText.text =
+                "Partita conclusa"
+
+            eventText.text =
+                "Match locale concluso"
+
+            return
+        }
+
+        saveSnapshot(
+            scoringSide
+        )
+
+        val previousGamesA =
+            gamesA
+
+        val previousGamesB =
+            gamesB
+
+        val result =
+            ArenaClassicScoring.registerPoint(
+                state = currentClassicScoreState(),
+                scoringSide = scoringSide
+            )
+
+        applyClassicScoreState(
+            result.state
+        )
+
+        statusText.text =
+            when {
+                result.matchWinner != null ->
+                    "Partita conclusa"
+
+                result.setWinner != null ->
+                    "SET LATO ${result.setWinner.name}"
+
+                gamesA != previousGamesA ||
+                        gamesB != previousGamesB ->
+                    "GAME LATO ${scoringSide.name}"
+
+                tieBreakActive ->
+                    "TIE-BREAK"
+
+                else ->
+                    "PUNTO LATO ${scoringSide.name}"
+            }
+
+        eventText.text =
+            "Modalità autonoma"
+
+        saveState()
+        updateScreen()
+        animatePointChange(
+            scoringSide
+        )
+
+        when {
+            result.matchWinner != null ->
+                scoreAnnouncer.announceMessage(
+                    "Set ${teamLabelForSide(result.matchWinner)}. Partita conclusa"
+                )
+
+            result.setWinner != null ->
+                scoreAnnouncer.announceMessage(
+                    "Set ${teamLabelForSide(result.setWinner)}"
+                )
+
+            else ->
+                announceValidPoint(
+                    scoringSide = scoringSide,
+                    previousGamesA = previousGamesA,
+                    previousGamesB = previousGamesB
+                )
+        }
+    }
+
+    private fun teamLabelForSide(
+        side: Side
+    ): String {
+        return when (side) {
+            Side.A -> teamALabel
+            Side.B -> teamBLabel
+        }.ifBlank {
+            when (side) {
+                Side.A -> DEFAULT_TEAM_A_LABEL
+                Side.B -> DEFAULT_TEAM_B_LABEL
+            }
+        }
+    }
+
+    private fun currentClassicScoreState(): ArenaClassicScoreState {
+        return ArenaClassicScoreState(
             pointsA = pointsA,
             pointsB = pointsB,
             gamesA = gamesA,
             gamesB = gamesB,
-            advantageSide = advantageSide
+            setsA = setsA,
+            setsB = setsB,
+            advantageSide = advantageSide,
+            killerMode = killerMode,
+            tieBreakActive = tieBreakActive,
+            tieBreakPointsA = tieBreakPointsA,
+            tieBreakPointsB = tieBreakPointsB,
+            localMatchFinished = localMatchFinished
         )
+    }
+
+    private fun applyClassicScoreState(
+        state: ArenaClassicScoreState
+    ) {
+        pointsA = state.pointsA
+        pointsB = state.pointsB
+        gamesA = state.gamesA
+        gamesB = state.gamesB
+        setsA = state.setsA
+        setsB = state.setsB
+        advantageSide = state.advantageSide
+        killerMode = state.killerMode
+        tieBreakActive = state.tieBreakActive
+        tieBreakPointsA = state.tieBreakPointsA
+        tieBreakPointsB = state.tieBreakPointsB
+        localMatchFinished = state.localMatchFinished
     }
 
     private fun winGame(
@@ -2016,8 +2314,14 @@ class MainActivity : AppCompatActivity() {
                 pointsB = pointsB,
                 gamesA = gamesA,
                 gamesB = gamesB,
+                setsA = setsA,
+                setsB = setsB,
                 advantageSide = advantageSide,
                 killerMode = killerMode,
+                tieBreakActive = tieBreakActive,
+                tieBreakPointsA = tieBreakPointsA,
+                tieBreakPointsB = tieBreakPointsB,
+                localMatchFinished = localMatchFinished,
                 scoringSide = scoringSide
             )
         )
@@ -2055,11 +2359,29 @@ class MainActivity : AppCompatActivity() {
         gamesB =
             snapshot.gamesB
 
+        setsA =
+            snapshot.setsA
+
+        setsB =
+            snapshot.setsB
+
         advantageSide =
             snapshot.advantageSide
 
         killerMode =
             snapshot.killerMode
+
+        tieBreakActive =
+            snapshot.tieBreakActive
+
+        tieBreakPointsA =
+            snapshot.tieBreakPointsA
+
+        tieBreakPointsB =
+            snapshot.tieBreakPointsB
+
+        localMatchFinished =
+            snapshot.localMatchFinished
 
         statusText.text =
             "ULTIMA AZIONE ANNULLATA"
@@ -2067,7 +2389,12 @@ class MainActivity : AppCompatActivity() {
         eventText.text =
             "Doppia pressione"
 
-        saveStateUpdateScreenAndEnqueueArenaSnapshot()
+        if (standaloneClassicMode) {
+            saveState()
+            updateScreen()
+        } else {
+            saveStateUpdateScreenAndEnqueueArenaSnapshot()
+        }
         animateUndoChange(
             snapshot.scoringSide
         )
@@ -2084,8 +2411,15 @@ class MainActivity : AppCompatActivity() {
         gamesA = 0
         gamesB = 0
 
+        setsA = 0
+        setsB = 0
+
         advantageSide = null
         killerMode = false
+        tieBreakActive = false
+        tieBreakPointsA = 0
+        tieBreakPointsB = 0
+        localMatchFinished = false
 
         scoreHistory.clear()
 
@@ -2159,8 +2493,14 @@ data class ScoreSnapshot(
     val pointsB: Int,
     val gamesA: Int,
     val gamesB: Int,
+    val setsA: Int,
+    val setsB: Int,
     val advantageSide: Side?,
     val killerMode: Boolean,
+    val tieBreakActive: Boolean,
+    val tieBreakPointsA: Int,
+    val tieBreakPointsB: Int,
+    val localMatchFinished: Boolean,
     val scoringSide: Side
 )
 

@@ -82,6 +82,14 @@ class ArenaScoreAnnouncer(
         )
     }
 
+    fun announceMessage(
+        message: String
+    ) {
+        speak(
+            message
+        )
+    }
+
     fun updateTeamLabels(
         teamALabel: String,
         teamBLabel: String
