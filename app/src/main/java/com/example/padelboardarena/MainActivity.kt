@@ -6,13 +6,16 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanRecord
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
@@ -21,6 +24,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
 import android.view.WindowManager
@@ -137,14 +141,19 @@ class MainActivity : AppCompatActivity() {
         private const val SCORE_FLASH_FALL_MS = 350L
         private const val SCORE_FLASH_PAUSE_MS = 100L
 
-        private const val NUMERIC_SCORE_TEXT_SIZE_SP = 320
+        private const val NUMERIC_SCORE_TEXT_SIZE_SP = 360
         private const val NUMERIC_SCORE_AUTO_MIN_SP = 140
-        private const val NUMERIC_SCORE_AUTO_MAX_SP = 380
+        private const val NUMERIC_SCORE_AUTO_MAX_SP = 430
         private const val ADV_SCORE_TEXT_SIZE_SP = 200
         private const val ADV_SCORE_AUTO_MIN_SP = 96
         private const val ADV_SCORE_AUTO_MAX_SP = 220
         private const val SCORE_TEXT_AUTOSIZE_STEP_SP = 4
         private const val LIVE_MATCH_POLLING_INTERVAL_MS = 15_000L
+        private const val BLE_WATCHDOG_INTERVAL_MS = 30_000L
+        private const val BLE_INACTIVITY_RESTART_MS = 180_000L
+        private const val BLE_MIN_SCAN_AGE_BEFORE_RESTART_MS = 180_000L
+        private const val BLE_RESTART_DELAY_MS = 1_000L
+        private const val BLE_SCAN_FAILURE_RETRY_DELAY_MS = 5_000L
         private const val DEFAULT_TEAM_A_LABEL = "Squadra A"
         private const val DEFAULT_TEAM_B_LABEL = "Squadra B"
     }
@@ -185,6 +194,9 @@ class MainActivity : AppCompatActivity() {
     private var liveMatchPollingActive = false
     private var liveMatchClientGeneration = 0
     private var activityVisible = false
+    private var bleWatchdogActive = false
+    private var bleScanRestartPending = false
+    private var bluetoothReceiverRegistered = false
     private var arenaCourtSelection: ArenaCourtSelection? = null
     private var arenaApiClient: ArenaApiClient? = null
     private var arenaLiveMatchClient: ArenaLiveMatchClient? = null
@@ -214,12 +226,75 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    private val bleWatchdogHandler =
+        Handler(
+            Looper.getMainLooper()
+        )
+
+    private val bleWatchdogRunnable =
+        object : Runnable {
+            override fun run() {
+                runBleWatchdogCheck()
+                scheduleNextBleWatchdogCheck()
+            }
+        }
+
+    private val bluetoothStateReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?
+            ) {
+                if (
+                    intent?.action !=
+                    BluetoothAdapter.ACTION_STATE_CHANGED
+                ) {
+                    return
+                }
+
+                when (
+                    intent.getIntExtra(
+                        BluetoothAdapter.EXTRA_STATE,
+                        BluetoothAdapter.ERROR
+                    )
+                ) {
+                    BluetoothAdapter.STATE_OFF -> {
+                        scanning = false
+                        bleScanStartedAt = 0L
+                        statusText.text =
+                            "Bluetooth non disponibile"
+                        logBleDebug(
+                            "Bluetooth off"
+                        )
+                    }
+
+                    BluetoothAdapter.STATE_ON -> {
+                        logBleDebug(
+                            "Bluetooth on"
+                        )
+                        if (
+                            activityVisible &&
+                            hasAnyShellyAssociation()
+                        ) {
+                            restartBleScanSafely(
+                                reason = "bluetooth_on",
+                                delayMs = BLE_RESTART_DELAY_MS
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     private val pointFlashColor =
         Color.rgb(70, 255, 120)
     private val undoFlashColor =
         Color.rgb(255, 80, 80)
 
     private var scanning = false
+    private var lastBlePacketReceivedAt = 0L
+    private var lastBleButtonEventAt = 0L
+    private var bleScanStartedAt = 0L
 
     /*
      * Qui salviamo l'identificativo stabile ottenuto
@@ -427,6 +502,7 @@ class MainActivity : AppCompatActivity() {
         reloadArenaCourtSelection()
         startBleScanIfDevicesAssigned()
         bootstrapArenaSession()
+        registerBluetoothStateReceiver()
 
 
         arenaSettingsButton.setOnClickListener {
@@ -437,13 +513,22 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         activityVisible = true
+        startBleScanIfDevicesAssigned()
+        startBleWatchdogIfNeeded()
         if (!standaloneClassicMode) {
             startLiveMatchPolling()
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        startBleScanIfDevicesAssigned()
+        startBleWatchdogIfNeeded()
+    }
+
     override fun onStop() {
         activityVisible = false
+        stopBleWatchdog()
         stopLiveMatchPolling()
         super.onStop()
     }
@@ -1729,6 +1814,127 @@ class MainActivity : AppCompatActivity() {
         checkPermissionsAndStart()
     }
 
+    private fun startBleWatchdogIfNeeded() {
+        if (!activityVisible) {
+            return
+        }
+
+        if (!hasAnyShellyAssociation()) {
+            return
+        }
+
+        if (bleWatchdogActive) {
+            return
+        }
+
+        bleWatchdogActive = true
+        scheduleNextBleWatchdogCheck()
+    }
+
+    private fun stopBleWatchdog() {
+        bleWatchdogActive = false
+        bleWatchdogHandler.removeCallbacks(
+            bleWatchdogRunnable
+        )
+    }
+
+    private fun scheduleNextBleWatchdogCheck() {
+        if (!bleWatchdogActive) {
+            return
+        }
+
+        bleWatchdogHandler.removeCallbacks(
+            bleWatchdogRunnable
+        )
+        bleWatchdogHandler.postDelayed(
+            bleWatchdogRunnable,
+            BLE_WATCHDOG_INTERVAL_MS
+        )
+    }
+
+    private fun runBleWatchdogCheck() {
+        if (
+            !activityVisible ||
+            !hasAnyShellyAssociation() ||
+            assignmentMode != null ||
+            bleScanRestartPending ||
+            !isBluetoothReadyForScan() ||
+            !hasBleScanPermissions()
+        ) {
+            return
+        }
+
+        if (!scanning) {
+            checkPermissionsAndStart()
+            return
+        }
+
+        val now =
+            SystemClock.elapsedRealtime()
+        val lastPacketAt =
+            lastBlePacketReceivedAt.takeIf { value ->
+                value > 0L
+            } ?: bleScanStartedAt
+        val scanAge =
+            now - bleScanStartedAt
+        val inactiveFor =
+            now - lastPacketAt
+
+        if (
+            scanAge >= BLE_MIN_SCAN_AGE_BEFORE_RESTART_MS &&
+            inactiveFor >= BLE_INACTIVITY_RESTART_MS
+        ) {
+            logBleDebug(
+                "BLE watchdog detected inactivity"
+            )
+            restartBleScanSafely(
+                reason = "watchdog_inactivity",
+                delayMs = BLE_RESTART_DELAY_MS
+            )
+        }
+    }
+
+    private fun restartBleScanSafely(
+        reason: String,
+        delayMs: Long = BLE_RESTART_DELAY_MS
+    ) {
+        if (
+            bleScanRestartPending ||
+            !activityVisible ||
+            !hasAnyShellyAssociation() ||
+            assignmentMode != null
+        ) {
+            return
+        }
+
+        bleScanRestartPending = true
+        logBleDebug(
+            "BLE scan restart: $reason"
+        )
+        statusText.text =
+            "Riconnessione Shelly..."
+
+        stopBleScanInternal(
+            clearAssignment = false,
+            updateUi = false
+        )
+
+        bleWatchdogHandler.postDelayed(
+            {
+                bleScanRestartPending = false
+
+                if (
+                    activityVisible &&
+                    hasAnyShellyAssociation() &&
+                    assignmentMode == null
+                ) {
+                    checkPermissionsAndStart()
+                }
+            },
+            delayMs
+        )
+    }
+
     private fun beginAssignment(
         mode: AssignmentMode
     ) {
@@ -1798,6 +2004,97 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun hasBleScanPermissions(): Boolean {
+        val requiredPermissions =
+            mutableListOf<String>()
+
+        if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.S
+        ) {
+            requiredPermissions.add(
+                Manifest.permission.BLUETOOTH_SCAN
+            )
+
+            requiredPermissions.add(
+                Manifest.permission.BLUETOOTH_CONNECT
+            )
+        }
+
+        requiredPermissions.add(
+            Manifest.permission.ACCESS_FINE_LOCATION
+        )
+
+        return requiredPermissions.all { permission ->
+            ContextCompat.checkSelfPermission(
+                this,
+                permission
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun isBluetoothReadyForScan(): Boolean {
+        val adapter =
+            bluetoothManager.adapter ?: return false
+
+        return try {
+            adapter.isEnabled
+        } catch (_: SecurityException) {
+            false
+        }
+    }
+
+    private fun registerBluetoothStateReceiver() {
+        if (bluetoothReceiverRegistered) {
+            return
+        }
+
+        val filter =
+            IntentFilter(
+                BluetoothAdapter.ACTION_STATE_CHANGED
+            )
+
+        if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.TIRAMISU
+        ) {
+            registerReceiver(
+                bluetoothStateReceiver,
+                filter,
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            registerReceiver(
+                bluetoothStateReceiver,
+                filter
+            )
+        }
+
+        bluetoothReceiverRegistered = true
+    }
+
+    private fun unregisterBluetoothStateReceiver() {
+        if (!bluetoothReceiverRegistered) {
+            return
+        }
+
+        unregisterReceiver(
+            bluetoothStateReceiver
+        )
+        bluetoothReceiverRegistered = false
+    }
+
+    private fun logBleDebug(
+        message: String
+    ) {
+        if (BuildConfig.DEBUG) {
+            Log.i(
+                ARENA_LOG_TAG,
+                message
+            )
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun startBleScan() {
         val bluetoothAdapter =
@@ -1812,6 +2109,7 @@ class MainActivity : AppCompatActivity() {
         if (!bluetoothAdapter.isEnabled) {
             statusText.text =
                 "Attiva il Bluetooth del telefono"
+            scanning = false
             return
         }
 
@@ -1821,6 +2119,7 @@ class MainActivity : AppCompatActivity() {
         if (scanner == null) {
             statusText.text =
                 "Scanner BLE non disponibile"
+            scanning = false
             return
         }
 
@@ -1832,37 +2131,82 @@ class MainActivity : AppCompatActivity() {
                 .setReportDelay(0)
                 .build()
 
-        scanner.startScan(
-            null,
-            settings,
-            scanCallback
-        )
+        try {
+            scanner.startScan(
+                null,
+                settings,
+                scanCallback
+            )
+        } catch (exception: RuntimeException) {
+            scanning = false
+            statusText.text =
+                "Bluetooth non disponibile"
+            logBleDebug(
+                "BLE scan start failed: " +
+                        exception.javaClass.simpleName
+            )
+            return
+        }
 
         scanning = true
+        bleScanStartedAt =
+            SystemClock.elapsedRealtime()
 
         startButton.text =
             "Ferma rilevamento"
 
         if (assignmentMode == null) {
             statusText.text =
-                "Scanner attivo: premi uno Shelly"
+                "Rilevamento Shelly attivo"
         }
+
+        logBleDebug(
+            "BLE scan started"
+        )
     }
 
     @SuppressLint("MissingPermission")
     private fun stopBleScan() {
-        bluetoothManager.adapter
-            ?.bluetoothLeScanner
-            ?.stopScan(scanCallback)
+        stopBleScanInternal(
+            clearAssignment = true,
+            updateUi = true
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopBleScanInternal(
+        clearAssignment: Boolean,
+        updateUi: Boolean
+    ) {
+        try {
+            bluetoothManager.adapter
+                ?.bluetoothLeScanner
+                ?.stopScan(scanCallback)
+        } catch (exception: RuntimeException) {
+            logBleDebug(
+                "BLE scan stop failed: " +
+                        exception.javaClass.simpleName
+            )
+        }
 
         scanning = false
-        assignmentMode = null
+        bleScanStartedAt = 0L
 
-        statusText.text =
-            "Scanner fermo"
+        if (clearAssignment) {
+            assignmentMode = null
+        }
 
-        startButton.text =
-            "Avvia rilevamento Shelly"
+        if (updateUi) {
+            statusText.text =
+                "Scanner fermo"
+
+            startButton.text =
+                "Avvia rilevamento Shelly"
+        }
+
+        logBleDebug(
+            "BLE scan stopped"
+        )
     }
 
     private val scanCallback =
@@ -1890,12 +2234,22 @@ class MainActivity : AppCompatActivity() {
             ) {
                 runOnUiThread {
                     scanning = false
+                    bleScanStartedAt = 0L
 
                     statusText.text =
-                        "Errore scansione BLE: $errorCode"
+                        "Riconnessione Shelly..."
 
                     startButton.text =
                         "Avvia rilevamento Shelly"
+
+                    logBleDebug(
+                        "BLE scan failed: $errorCode"
+                    )
+
+                    restartBleScanSafely(
+                        reason = "scan_failed_$errorCode",
+                        delayMs = BLE_SCAN_FAILURE_RETRY_DELAY_MS
+                    )
                 }
             }
         }
@@ -1943,6 +2297,9 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
 
+        lastBlePacketReceivedAt =
+            SystemClock.elapsedRealtime()
+
         val parsedPacket =
             parseShellyPacket(
                 serviceData
@@ -1951,6 +2308,9 @@ class MainActivity : AppCompatActivity() {
         val buttonEvent =
             parsedPacket.buttonEvent
                 ?: return
+
+        lastBleButtonEventAt =
+            SystemClock.elapsedRealtime()
 
         val currentAssignment =
             assignmentMode
@@ -3844,6 +4204,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        stopBleWatchdog()
+        unregisterBluetoothStateReceiver()
+
         stopLiveMatchPolling()
 
         if (scanning) {

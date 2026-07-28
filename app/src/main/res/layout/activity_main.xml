@@ -63,9 +63,16 @@
                     android:layout_height="wrap_content"
                     android:text="Squadra A"
                     android:textColor="#FFFFFF"
-                    android:textSize="24sp"
+                    android:textSize="42sp"
                     android:textStyle="bold"
-                    android:gravity="center" />
+                    android:gravity="center"
+                    android:singleLine="true"
+                    android:maxLines="1"
+                    android:autoSizeTextType="uniform"
+                    android:autoSizeMinTextSize="20sp"
+                    android:autoSizeMaxTextSize="42sp"
+                    android:autoSizeStepGranularity="2sp"
+                    android:includeFontPadding="false" />
 
                 <TextView
                     android:id="@+id/scoreAText"
@@ -74,14 +81,14 @@
                     android:layout_weight="1"
                     android:text="0"
                     android:textColor="#FFFFFF"
-                    android:textSize="320sp"
+                    android:textSize="360sp"
                     android:textStyle="bold"
                     android:gravity="center"
                     android:singleLine="true"
                     android:maxLines="1"
                     android:autoSizeTextType="uniform"
                     android:autoSizeMinTextSize="140sp"
-                    android:autoSizeMaxTextSize="380sp"
+                    android:autoSizeMaxTextSize="430sp"
                     android:autoSizeStepGranularity="4sp"
                     android:includeFontPadding="false" />
 
@@ -168,9 +175,16 @@
                     android:layout_height="wrap_content"
                     android:text="Squadra B"
                     android:textColor="#FFFFFF"
-                    android:textSize="24sp"
+                    android:textSize="42sp"
                     android:textStyle="bold"
-                    android:gravity="center" />
+                    android:gravity="center"
+                    android:singleLine="true"
+                    android:maxLines="1"
+                    android:autoSizeTextType="uniform"
+                    android:autoSizeMinTextSize="20sp"
+                    android:autoSizeMaxTextSize="42sp"
+                    android:autoSizeStepGranularity="2sp"
+                    android:includeFontPadding="false" />
 
                 <TextView
                     android:id="@+id/scoreBText"
@@ -179,14 +193,14 @@
                     android:layout_weight="1"
                     android:text="0"
                     android:textColor="#FFFFFF"
-                    android:textSize="320sp"
+                    android:textSize="360sp"
                     android:textStyle="bold"
                     android:gravity="center"
                     android:singleLine="true"
                     android:maxLines="1"
                     android:autoSizeTextType="uniform"
                     android:autoSizeMinTextSize="140sp"
-                    android:autoSizeMaxTextSize="380sp"
+                    android:autoSizeMaxTextSize="430sp"
                     android:autoSizeStepGranularity="4sp"
                     android:includeFontPadding="false" />
 

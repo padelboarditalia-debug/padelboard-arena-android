@@ -55,42 +55,54 @@ class MainActivityScoreboardSourceTest {
     fun scoreTextIsLargerAndAutoSizedOnOneLine() {
         val layout =
             mainLayout()
+        val scoreABody =
+            viewSlice(
+                source = layout,
+                startMarker = "scoreAText",
+                endMarker = "GAME"
+            )
+        val scoreBBody =
+            viewSlice(
+                source = layout,
+                startMarker = "scoreBText",
+                endMarker = "GAME"
+            )
 
         assertEquals(
             2,
             Regex(
-                """android:textSize="320sp"""
-            ).findAll(layout).count()
+                """android:textSize="360sp"""
+            ).findAll(scoreABody + scoreBBody).count()
         )
         assertEquals(
             2,
             Regex(
                 """android:autoSizeMinTextSize="140sp"""
-            ).findAll(layout).count()
+            ).findAll(scoreABody + scoreBBody).count()
         )
         assertEquals(
             2,
             Regex(
-                """android:autoSizeMaxTextSize="380sp"""
-            ).findAll(layout).count()
+                """android:autoSizeMaxTextSize="430sp"""
+            ).findAll(scoreABody + scoreBBody).count()
         )
         assertEquals(
             2,
             Regex(
                 """android:singleLine="true"""
-            ).findAll(layout).count()
+            ).findAll(scoreABody + scoreBBody).count()
         )
         assertEquals(
             2,
             Regex(
                 """android:maxLines="1"""
-            ).findAll(layout).count()
+            ).findAll(scoreABody + scoreBBody).count()
         )
         assertEquals(
             2,
             Regex(
                 """android:autoSizeTextType="uniform"""
-            ).findAll(layout).count()
+            ).findAll(scoreABody + scoreBBody).count()
         )
     }
 
@@ -112,6 +124,39 @@ class MainActivityScoreboardSourceTest {
         assertFalse(layout.contains("android:ellipsize"))
         supportedValues.forEach { value ->
             assertTrue(value.isNotBlank())
+        }
+    }
+
+    @Test
+    fun teamNamesUseUniformAutosizeOnOneLine() {
+        val layout =
+            mainLayout()
+        val teamABody =
+            viewSlice(
+                source = layout,
+                startMarker = "teamAText",
+                endMarker = "scoreAText"
+            )
+        val teamBBody =
+            viewSlice(
+                source = layout,
+                startMarker = "teamBText",
+                endMarker = "scoreBText"
+            )
+
+        listOf(
+            teamABody,
+            teamBBody
+        ).forEach { body ->
+            assertTrue(body.contains("android:textSize=\"42sp\""))
+            assertTrue(body.contains("android:singleLine=\"true\""))
+            assertTrue(body.contains("android:maxLines=\"1\""))
+            assertTrue(body.contains("android:autoSizeTextType=\"uniform\""))
+            assertTrue(body.contains("android:autoSizeMinTextSize=\"20sp\""))
+            assertTrue(body.contains("android:autoSizeMaxTextSize=\"42sp\""))
+            assertTrue(body.contains("android:autoSizeStepGranularity=\"2sp\""))
+            assertTrue(body.contains("android:includeFontPadding=\"false\""))
+            assertFalse(body.contains("android:ellipsize"))
         }
     }
 
@@ -254,7 +299,7 @@ class MainActivityScoreboardSourceTest {
                 endMarker = "private fun displayPointForSide("
             )
 
-        assertTrue(source.contains("private const val NUMERIC_SCORE_TEXT_SIZE_SP = 320"))
+        assertTrue(source.contains("private const val NUMERIC_SCORE_TEXT_SIZE_SP = 360"))
         assertTrue(source.contains("private const val ADV_SCORE_TEXT_SIZE_SP = 200"))
         assertTrue(sizingBody.contains("displayedValue == \"ADV\""))
         assertTrue(sizingBody.contains("ADV_SCORE_TEXT_SIZE_SP"))
@@ -744,6 +789,30 @@ class MainActivityScoreboardSourceTest {
             source = mainActivitySource(),
             startMarker = "private fun animateScoreChange(",
             endMarker = "private fun registerPoint("
+        )
+    }
+
+    private fun viewSlice(
+        source: String,
+        startMarker: String,
+        endMarker: String
+    ): String {
+        val start =
+            source.indexOf(
+                startMarker
+            )
+        val end =
+            source.indexOf(
+                endMarker,
+                start
+            )
+
+        assertTrue(start >= 0)
+        assertTrue(end > start)
+
+        return source.substring(
+            start,
+            end
         )
     }
 
