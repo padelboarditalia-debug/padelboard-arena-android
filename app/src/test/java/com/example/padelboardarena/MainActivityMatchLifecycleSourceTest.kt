@@ -240,6 +240,135 @@ class MainActivityMatchLifecycleSourceTest {
     }
 
     @Test
+    fun lastClosedReopenSuccessRestoresPreviousMatchAsActiveCorrection() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun reopenLastClosedMatchForCorrection()",
+                endMarker = "private fun captureSuspendedCurrentMatch()"
+            )
+
+        assertTrue(body.contains("currentLiveMatchId ="))
+        assertTrue(body.contains("lastClosedMatch.matchId"))
+        assertTrue(body.contains("correctingPreviousMatchId ="))
+        assertTrue(body.contains("restoreScoreSnapshot("))
+        assertTrue(body.contains("lastClosedMatch.toScoreSnapshot()"))
+        assertTrue(body.contains("clearMatchLifecycleState()"))
+        assertTrue(body.contains("lastClosedMatchStore.markReopenUnavailable()"))
+        assertTrue(body.contains("reopenedClosedMatchForCorrection = true"))
+        assertTrue(body.contains("restartBleScanSafely("))
+        assertTrue(body.contains("reopened_previous_match"))
+    }
+
+    @Test
+    fun scoreSnapshotRestoreIncludesLocalFinishedAndFullScoreState() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun restoreScoreSnapshot(",
+                endMarker = "private fun clearFinishedLifecycleIfCourtChanged("
+            )
+
+        assertTrue(body.contains("pointsA = snapshot.pointsA"))
+        assertTrue(body.contains("pointsB = snapshot.pointsB"))
+        assertTrue(body.contains("gamesA = snapshot.gamesA"))
+        assertTrue(body.contains("gamesB = snapshot.gamesB"))
+        assertTrue(body.contains("setsA = snapshot.setsA"))
+        assertTrue(body.contains("setsB = snapshot.setsB"))
+        assertTrue(body.contains("advantageSide = snapshot.advantageSide"))
+        assertTrue(body.contains("killerMode = snapshot.killerMode"))
+        assertTrue(body.contains("tieBreakActive = snapshot.tieBreakActive"))
+        assertTrue(body.contains("tieBreakPointsA = snapshot.tieBreakPointsA"))
+        assertTrue(body.contains("tieBreakPointsB = snapshot.tieBreakPointsB"))
+        assertTrue(body.contains("localMatchFinished = snapshot.localMatchFinished"))
+    }
+
+    @Test
+    fun correctionModeIgnoresSuspendedLiveMatchPollingResponses() {
+        val source =
+            mainActivitySource()
+        val body =
+            methodSlice(
+                source = source,
+                startMarker = "private fun applyLiveMatchResponse(",
+                endMarker = "private fun activateNewLiveMatch("
+            )
+
+        assertTrue(source.contains("private var correctingPreviousMatchId: String? = null"))
+        assertTrue(body.contains("val correctionMatchId ="))
+        assertTrue(body.contains("if (correctionMatchId != null)"))
+        assertTrue(body.contains("reason=no_live_match"))
+        assertTrue(body.contains("match.matchId != correctionMatchId"))
+        assertTrue(body.contains("reason=suspended_match"))
+        assertTrue(body.contains("return"))
+        assertTrue(body.contains("Arena correction polling accepted"))
+    }
+
+    @Test
+    fun correctionModeKeepsInputDispatchActiveForPreviousMatch() {
+        val source =
+            mainActivitySource()
+        val dispatchBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun handleButtonEvent(",
+                endMarker = "private fun correctGameForSide("
+            )
+        val registerBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun registerPoint(",
+                endMarker = "private fun announceValidPoint("
+            )
+        val finishBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun finishCurrentMatch()",
+                endMarker = "private fun reopenFinishedMatch()"
+            )
+
+        assertTrue(dispatchBody.contains("Arena input dispatch:"))
+        assertTrue(dispatchBody.contains("ButtonEvent.SINGLE_PRESS"))
+        assertTrue(dispatchBody.contains("ButtonEvent.DOUBLE_PRESS"))
+        assertTrue(dispatchBody.contains("ButtonEvent.TRIPLE_PRESS"))
+        assertTrue(dispatchBody.contains("ButtonEvent.LONG_PRESS"))
+        assertTrue(registerBody.contains("matchLifecycleState !="))
+        assertTrue(registerBody.contains("correctionMatchId"))
+        assertTrue(finishBody.contains("matchLifecycleState =="))
+        assertTrue(finishBody.contains("MatchLifecycleState.REOPENING"))
+    }
+
+    @Test
+    fun finishingCorrectionClearsCorrectionModeAndRestartsPolling() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun finishCurrentMatch()",
+                endMarker = "private fun reopenFinishedMatch()"
+            )
+
+        assertTrue(body.contains("if (reopenedClosedMatchForCorrection)"))
+        assertTrue(body.contains("reopenedClosedMatchForCorrection = false"))
+        assertTrue(body.contains("correctingPreviousMatchId = null"))
+        assertTrue(body.contains("startLiveMatchPolling()"))
+    }
+
+    @Test
+    fun failedLastClosedReopenRestoresSuspendedMatchAndClearsCorrectionMode() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun reopenLastClosedMatchForCorrection()",
+                endMarker = "private fun captureSuspendedCurrentMatch()"
+            )
+
+        assertTrue(body.contains("restoreSuspendedCurrentMatch("))
+        assertTrue(body.contains("correctingPreviousMatchId = null"))
+        assertTrue(body.contains("Match corrente mantenuto"))
+        assertTrue(body.contains("startLiveMatchPolling()"))
+    }
+
+    @Test
     fun suspendedCurrentMatchKeepsScoreLabelsLifecycleAndHistoryOnFailure() {
         val source =
             mainActivitySource()
@@ -305,6 +434,61 @@ class MainActivityMatchLifecycleSourceTest {
             body.indexOf("arenaLifecycleSequenceStore.advanceToAtLeast(") <
                     body.indexOf("currentLiveMatchId")
         )
+    }
+
+    @Test
+    fun finishedLifecycleColdStartCanAdoptNextLiveMatchAfterRestore() {
+        val source =
+            mainActivitySource()
+        val bootstrapBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun bootstrapArenaSession()",
+                endMarker = "private fun startLiveMatchPolling()"
+            )
+        val applyBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun applyLiveMatchResponse(",
+                endMarker = "private fun activateNewLiveMatch("
+            )
+        val activateBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun activateNewLiveMatch(",
+                endMarker = "private fun updateTeamLabels("
+            )
+        val emptyScoreBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun isLocalScoreEmptyForLiveMatchBootstrap()",
+                endMarker = "private fun bootstrapLocalScoreFromLiveMatch("
+            )
+        val bootstrapScoreBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun bootstrapLocalScoreFromLiveMatch(",
+                endMarker = "private fun adoptBootstrappedLiveScoreIfNeeded("
+            )
+
+        assertTrue(bootstrapBody.contains("ArenaSessionRestoreResult.RESTORED"))
+        assertTrue(bootstrapBody.contains("activityVisible"))
+        assertTrue(bootstrapBody.contains("startLiveMatchPolling()"))
+        assertTrue(applyBody.contains("matchLifecycleState == MatchLifecycleState.FINISHED_BY_ARENA"))
+        assertTrue(applyBody.contains("lastFinishedMatchId != match.matchId"))
+        assertTrue(applyBody.contains("replacesFinishedMatch"))
+        assertTrue(applyBody.contains("activateNewLiveMatch("))
+        assertTrue(applyBody.contains("bootstrapLocalScoreFromLiveMatch("))
+        assertTrue(applyBody.contains("adoptBootstrappedLiveScoreIfNeeded("))
+        assertTrue(activateBody.contains("clearMatchLifecycleState()"))
+        assertTrue(activateBody.contains("localMatchFinished = false"))
+        assertTrue(emptyScoreBody.contains("gamesA == 0"))
+        assertTrue(emptyScoreBody.contains("gamesB == 0"))
+        assertTrue(emptyScoreBody.contains("matchLifecycleState == MatchLifecycleState.ACTIVE"))
+        assertTrue(bootstrapScoreBody.contains("gamesA ="))
+        assertTrue(bootstrapScoreBody.contains("match.scoreA.coerceAtLeast("))
+        assertTrue(bootstrapScoreBody.contains("gamesB ="))
+        assertTrue(bootstrapScoreBody.contains("match.scoreB.coerceAtLeast("))
     }
 
     @Test

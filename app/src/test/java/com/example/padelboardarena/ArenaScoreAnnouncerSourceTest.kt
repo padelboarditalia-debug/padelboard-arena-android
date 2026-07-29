@@ -76,7 +76,7 @@ class ArenaScoreAnnouncerSourceTest {
 
         val duplicateCheckIndex =
             processBody.indexOf(
-                "previousPacketId == packetId"
+                "previousPacketId == dedupKey"
             )
         val duplicateReturnIndex =
             processBody.indexOf(

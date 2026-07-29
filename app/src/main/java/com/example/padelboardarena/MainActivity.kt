@@ -154,6 +154,7 @@ class MainActivity : AppCompatActivity() {
         private const val BLE_MIN_SCAN_AGE_BEFORE_RESTART_MS = 180_000L
         private const val BLE_RESTART_DELAY_MS = 1_000L
         private const val BLE_SCAN_FAILURE_RETRY_DELAY_MS = 5_000L
+        private const val BLE_NEW_LIVE_MATCH_RESTART_DELAY_MS = 500L
         private const val DEFAULT_TEAM_A_LABEL = "Squadra A"
         private const val DEFAULT_TEAM_B_LABEL = "Squadra B"
     }
@@ -192,10 +193,12 @@ class MainActivity : AppCompatActivity() {
         DEFAULT_TEAM_B_LABEL
     private var liveMatchRequestInFlight = false
     private var liveMatchPollingActive = false
+    private var liveMatchPollingScheduled = false
     private var liveMatchClientGeneration = 0
     private var activityVisible = false
     private var bleWatchdogActive = false
     private var bleScanRestartPending = false
+    private var lastBleRestartedLiveMatchId: String? = null
     private var bluetoothReceiverRegistered = false
     private var arenaCourtSelection: ArenaCourtSelection? = null
     private var arenaApiClient: ArenaApiClient? = null
@@ -212,6 +215,7 @@ class MainActivity : AppCompatActivity() {
     private var lastFinishEventId: String? = null
     private var lastFinishEventSequence: Int = 0
     private var reopenedClosedMatchForCorrection = false
+    private var correctingPreviousMatchId: String? = null
 
     private val liveMatchPollingHandler =
         Handler(
@@ -221,6 +225,11 @@ class MainActivity : AppCompatActivity() {
     private val liveMatchPollingRunnable =
         object : Runnable {
             override fun run() {
+                liveMatchPollingScheduled = false
+                logArenaRuntimeDiag(
+                    "liveMatchPollingRunnable fired: " +
+                            liveMatchRuntimeState()
+                )
                 refreshLiveMatchIfNeeded()
                 scheduleNextLiveMatchPoll()
             }
@@ -335,7 +344,7 @@ class MainActivity : AppCompatActivity() {
      * È la protezione principale contro i punti multipli.
      */
     private val lastPacketIdByDevice =
-        mutableMapOf<String, Int>()
+        mutableMapOf<String, BlePacketDedupKey>()
 
     /*
      * Protezione di riserva nel caso il packet ID non sia presente.
@@ -496,13 +505,28 @@ class MainActivity : AppCompatActivity() {
             ArenaScoreAnnouncer(
                 this
             )
+        logArenaRuntimeState(
+            "onCreate:after_bind"
+        )
         reloadArenaOperationMode()
+        logArenaRuntimeState(
+            "onCreate:after_reload_mode"
+        )
         loadSavedData()
+        logArenaRuntimeState(
+            "onCreate:after_load_saved_data"
+        )
         updateScreen()
         reloadArenaCourtSelection()
+        logArenaRuntimeState(
+            "onCreate:after_reload_court"
+        )
         startBleScanIfDevicesAssigned()
         bootstrapArenaSession()
         registerBluetoothStateReceiver()
+        logArenaRuntimeState(
+            "onCreate:end"
+        )
 
 
         arenaSettingsButton.setOnClickListener {
@@ -512,18 +536,37 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        logArenaRuntimeState(
+            "onStart:before_visible"
+        )
         activityVisible = true
+        logArenaRuntimeState(
+            "onStart:after_visible"
+        )
         startBleScanIfDevicesAssigned()
         startBleWatchdogIfNeeded()
         if (!standaloneClassicMode) {
             startLiveMatchPolling()
+        } else {
+            logArenaRuntimeDiag(
+                "onStart skip live-match polling: reason=standalone"
+            )
         }
+        logArenaRuntimeState(
+            "onStart:end"
+        )
     }
 
     override fun onResume() {
         super.onResume()
+        logArenaRuntimeState(
+            "onResume:start"
+        )
         startBleScanIfDevicesAssigned()
         startBleWatchdogIfNeeded()
+        logArenaRuntimeState(
+            "onResume:end"
+        )
     }
 
     override fun onStop() {
@@ -590,7 +633,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bootstrapArenaSession() {
+        logArenaRuntimeState(
+            "bootstrap:start"
+        )
         if (standaloneClassicMode) {
+            logArenaRuntimeDiag(
+                "bootstrap skip restore: reason=standalone"
+            )
             arenaConnectionStatusText.text =
                 "Modalità autonoma"
             arenaLastCallText.text =
@@ -602,28 +651,53 @@ class MainActivity : AppCompatActivity() {
             "Arena: ripristino sessione"
 
         arenaManualExecutor.execute {
+            logArenaRuntimeDiag(
+                "bootstrap restore begin"
+            )
             val result =
                 arenaAuthClient.restorePersistedSession()
 
             runOnUiThread {
+                logArenaRuntimeDiag(
+                    "bootstrap restore result: " +
+                            "result=$result, " +
+                            "tokenPresent=${yesNo(arenaAuthClient.currentAccessToken() != null)}"
+                )
                 when (result) {
                     ArenaSessionRestoreResult.RESTORED -> {
                         arenaConnectionStatusText.text =
                             "Arena connessa"
                         if (arenaCourtSelection == null) {
+                            logArenaRuntimeDiag(
+                                "bootstrap decision: action=skip_start_polling, reason=no_court"
+                            )
                             arenaLastCallText.text =
                                 "Seleziona campo Arena"
+                        } else if (activityVisible) {
+                            logArenaRuntimeDiag(
+                                "bootstrap decision: action=startLiveMatchPolling, reason=restored_visible"
+                            )
+                            startLiveMatchPolling()
                         } else {
+                            logArenaRuntimeDiag(
+                                "bootstrap decision: action=refreshLiveMatchIfNeeded, reason=restored_not_visible"
+                            )
                             refreshLiveMatchIfNeeded()
                         }
                     }
 
                     ArenaSessionRestoreResult.MISSING -> {
+                        logArenaRuntimeDiag(
+                            "bootstrap decision: action=skip_start_polling, reason=session_missing"
+                        )
                         arenaConnectionStatusText.text =
                             "Login Arena richiesto"
                     }
 
                     ArenaSessionRestoreResult.FAILED -> {
+                        logArenaRuntimeDiag(
+                            "bootstrap decision: action=skip_start_polling, reason=session_failed"
+                        )
                         arenaConnectionStatusText.text =
                             "Login Arena richiesto"
                     }
@@ -633,15 +707,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startLiveMatchPolling() {
+        logArenaRuntimeDiag(
+            "startLiveMatchPolling called: " +
+                    "alreadyScheduled=${yesNo(liveMatchPollingScheduled)}, " +
+                    liveMatchRuntimeState()
+        )
         if (standaloneClassicMode) {
             liveMatchPollingActive = false
+            logLiveMatchSkip(
+                "standalone"
+            )
+            logArenaRuntimeDiag(
+                "startLiveMatchPolling skip: reason=standalone"
+            )
             arenaLastCallText.text =
                 "Modalità autonoma"
             return
         }
 
-        if (arenaCourtSelection == null || arenaLiveMatchClient == null) {
+        if (arenaCourtSelection == null) {
             liveMatchPollingActive = false
+            logLiveMatchSkip(
+                "no_court"
+            )
+            logArenaRuntimeDiag(
+                "startLiveMatchPolling skip: reason=no_court"
+            )
+            arenaLastCallText.text =
+                "Seleziona campo Arena"
+            return
+        }
+
+        if (arenaLiveMatchClient == null) {
+            liveMatchPollingActive = false
+            logLiveMatchSkip(
+                "no_client"
+            )
+            logArenaRuntimeDiag(
+                "startLiveMatchPolling skip: reason=no_client"
+            )
             arenaLastCallText.text =
                 "Seleziona campo Arena"
             return
@@ -654,48 +758,118 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopLiveMatchPolling() {
         liveMatchPollingActive = false
+        liveMatchPollingScheduled = false
         liveMatchPollingHandler.removeCallbacks(
             liveMatchPollingRunnable
         )
     }
 
     private fun scheduleNextLiveMatchPoll() {
+        logArenaRuntimeDiag(
+            "scheduleNextLiveMatchPoll removeCallbacks: " +
+                    "wasScheduled=${yesNo(liveMatchPollingScheduled)}, " +
+                    "pollingActive=${yesNo(liveMatchPollingActive)}"
+        )
         liveMatchPollingHandler.removeCallbacks(
             liveMatchPollingRunnable
         )
+        liveMatchPollingScheduled = false
 
         if (liveMatchPollingActive) {
             liveMatchPollingHandler.postDelayed(
                 liveMatchPollingRunnable,
                 LIVE_MATCH_POLLING_INTERVAL_MS
             )
+            liveMatchPollingScheduled = true
+            logArenaRuntimeDiag(
+                "scheduleNextLiveMatchPoll postDelayed: scheduled=yes"
+            )
+        } else {
+            logArenaRuntimeDiag(
+                "scheduleNextLiveMatchPoll postDelayed: scheduled=no, reason=polling_inactive"
+            )
         }
     }
 
     private fun refreshLiveMatchIfNeeded() {
         if (standaloneClassicMode) {
+            logLiveMatchSkip(
+                "standalone"
+            )
+            logArenaRuntimeDiag(
+                "refreshLiveMatchIfNeeded return: reason=standalone, " +
+                        liveMatchRuntimeState()
+            )
             return
         }
 
         if (liveMatchRequestInFlight) {
+            logLiveMatchSkip(
+                "request_in_flight"
+            )
+            logArenaRuntimeDiag(
+                "refreshLiveMatchIfNeeded return: reason=request_in_flight, " +
+                        liveMatchRuntimeState()
+            )
+            return
+        }
+
+        if (arenaCourtSelection == null) {
+            logLiveMatchSkip(
+                "no_court"
+            )
+            logArenaRuntimeDiag(
+                "refreshLiveMatchIfNeeded return: reason=no_court, " +
+                        liveMatchRuntimeState()
+            )
             return
         }
 
         val liveMatchClient =
-            arenaLiveMatchClient ?: return
+            arenaLiveMatchClient
+
+        if (liveMatchClient == null) {
+            logLiveMatchSkip(
+                "no_client"
+            )
+            logArenaRuntimeDiag(
+                "refreshLiveMatchIfNeeded return: reason=no_client, " +
+                        liveMatchRuntimeState()
+            )
+            return
+        }
 
         val requestGeneration =
             liveMatchClientGeneration
 
         if (arenaAuthClient.currentAccessToken() == null) {
+            logLiveMatchSkip(
+                "no_token"
+            )
+            logArenaRuntimeDiag(
+                "refreshLiveMatchIfNeeded return: reason=no_token, " +
+                        liveMatchRuntimeState()
+            )
             return
         }
 
         liveMatchRequestInFlight = true
+        logArenaRuntimeDiag(
+            "refreshLiveMatchIfNeeded GET start: " +
+                    "courtId=${arenaCourtSelection?.selectedCourtId}, " +
+                    liveMatchRuntimeState()
+        )
 
         liveMatchClient.fetchLiveMatch { result ->
             runOnUiThread {
                 if (requestGeneration != liveMatchClientGeneration) {
+                    logArenaRuntimeDiag(
+                        "live-match callback ignored: " +
+                                "reason=client_generation_changed, " +
+                                "http=${result.statusCode}, " +
+                                "requestGeneration=$requestGeneration, " +
+                                "currentGeneration=$liveMatchClientGeneration"
+                    )
                     return@runOnUiThread
                 }
 
@@ -703,6 +877,20 @@ class MainActivity : AppCompatActivity() {
 
                 val response =
                     result.response
+                val match =
+                    response?.match
+
+                logArenaRuntimeDiag(
+                    "live-match callback: " +
+                            "success=${yesNo(result.success)}, " +
+                            "http=${result.statusCode}, " +
+                            "matchId=${match?.matchId}, " +
+                            "receivedGamesA=${match?.scoreA}, " +
+                            "receivedGamesB=${match?.scoreB}, " +
+                            "reason=${response?.reason}, " +
+                            "lifecycleBefore=${matchLifecycleState.name}, " +
+                            liveMatchRuntimeState()
+                )
 
                 if (result.success && response != null) {
                     applyLiveMatchResponse(
@@ -718,8 +906,62 @@ class MainActivity : AppCompatActivity() {
                             "Arena live match failed: HTTP ${result.statusCode}"
                         )
                     }
+                    logArenaRuntimeDiag(
+                        "live-match callback ignored: " +
+                                "reason=http_or_parse_failure, " +
+                                "http=${result.statusCode}, " +
+                                "success=${yesNo(result.success)}"
+                    )
                 }
             }
+        }
+    }
+
+    private fun logLiveMatchSkip(reason: String) {
+        if (BuildConfig.DEBUG) {
+            Log.i(
+                ARENA_LOG_TAG,
+                "Arena live match skipped: reason=$reason"
+            )
+        }
+    }
+
+    private fun logArenaRuntimeState(label: String) {
+        logArenaRuntimeDiag(
+            "$label: " +
+                    liveMatchRuntimeState()
+        )
+    }
+
+    private fun liveMatchRuntimeState(): String {
+        return "standalone=${yesNo(standaloneClassicMode)}, " +
+                "activityVisible=${yesNo(activityVisible)}, " +
+                "courtPresent=${yesNo(arenaCourtSelection != null)}, " +
+                "courtId=${arenaCourtSelection?.selectedCourtId}, " +
+                "liveMatchClientPresent=${yesNo(arenaLiveMatchClient != null)}, " +
+                "tokenPresent=${yesNo(arenaAuthClient.currentAccessToken() != null)}, " +
+                "lifecycle=${matchLifecycleState.name}, " +
+                "currentLiveMatchId=$currentLiveMatchId, " +
+                "localMatchFinished=$localMatchFinished, " +
+                "pollingActive=${yesNo(liveMatchPollingActive)}, " +
+                "pollingScheduled=${yesNo(liveMatchPollingScheduled)}, " +
+                "requestInFlight=${yesNo(liveMatchRequestInFlight)}"
+    }
+
+    private fun logArenaRuntimeDiag(message: String) {
+        if (BuildConfig.DEBUG) {
+            Log.i(
+                ARENA_LOG_TAG,
+                "ARENA_RUNTIME_DIAG $message"
+            )
+        }
+    }
+
+    private fun yesNo(value: Boolean): String {
+        return if (value) {
+            "yes"
+        } else {
+            "no"
         }
     }
 
@@ -912,13 +1154,81 @@ class MainActivity : AppCompatActivity() {
         response: ArenaLiveMatchResponse
     ) {
         if (standaloneClassicMode) {
+            logArenaRuntimeDiag(
+                "applyLiveMatchResponse ignored: reason=standalone"
+            )
             return
         }
 
         val match =
             response.match
+        val lifecycleBeforeAdoption =
+            matchLifecycleState
+        logArenaRuntimeDiag(
+            "applyLiveMatchResponse start: " +
+                    "matchId=${match?.matchId}, " +
+                    "receivedGamesA=${match?.scoreA}, " +
+                    "receivedGamesB=${match?.scoreB}, " +
+                    "reason=${response.reason}, " +
+                    "lifecycleBefore=${lifecycleBeforeAdoption.name}, " +
+                    liveMatchRuntimeState()
+        )
+        val correctionMatchId =
+            correctingPreviousMatchId
+
+        if (correctionMatchId != null) {
+            if (match == null) {
+                logArenaRuntimeDiag(
+                    "applyLiveMatchResponse ignored: " +
+                            "reason=correction_no_live_match, " +
+                            "correctionMatchId=$correctionMatchId"
+                )
+                Log.i(
+                    ARENA_LOG_TAG,
+                    "Arena correction polling ignored: " +
+                            "reason=no_live_match, " +
+                            "correctionMatchId=$correctionMatchId"
+                )
+                return
+            }
+
+            if (match.matchId != correctionMatchId) {
+                logArenaRuntimeDiag(
+                    "applyLiveMatchResponse ignored: " +
+                            "reason=correction_suspended_match, " +
+                            "correctionMatchId=$correctionMatchId, " +
+                            "responseMatchId=${match.matchId}"
+                )
+                Log.i(
+                    ARENA_LOG_TAG,
+                    "Arena correction polling ignored: " +
+                            "reason=suspended_match, " +
+                            "correctionMatchId=$correctionMatchId, " +
+                            "responseMatchId=${match.matchId}"
+                )
+                return
+            }
+
+            Log.i(
+                ARENA_LOG_TAG,
+                "Arena correction polling accepted: " +
+                        "matchId=${match.matchId}, " +
+                        "gamesA=$gamesA, " +
+                        "gamesB=$gamesB, " +
+                        "pointsA=${displayPointForSide(Side.A)}, " +
+                        "pointsB=${displayPointForSide(Side.B)}"
+            )
+        }
 
         if (match == null) {
+            logArenaRuntimeDiag(
+                "applyLiveMatchResponse ignored: " +
+                        "reason=no_live_match, " +
+                        "responseReason=${response.reason}, " +
+                        "lifecycle=${matchLifecycleState.name}, " +
+                        "localGamesA=$gamesA, " +
+                        "localGamesB=$gamesB"
+            )
             updateTeamLabels(
                 DEFAULT_TEAM_A_LABEL,
                 DEFAULT_TEAM_B_LABEL
@@ -949,17 +1259,49 @@ class MainActivity : AppCompatActivity() {
             matchLifecycleState == MatchLifecycleState.FINISHED_BY_ARENA &&
                     lastFinishedMatchId != null &&
                     lastFinishedMatchId != match.matchId
+        val reopensSameFinishedLiveMatch =
+            matchLifecycleState == MatchLifecycleState.FINISHED_BY_ARENA &&
+                    lastFinishedMatchId != null &&
+                    lastFinishedMatchId == match.matchId
+        logArenaRuntimeDiag(
+            "applyLiveMatchResponse decision: " +
+                    "previousLiveMatchId=$previousLiveMatchId, " +
+                    "responseMatchId=${match.matchId}, " +
+                    "matchChanged=${yesNo(matchChanged)}, " +
+                    "replacesFinishedMatch=${yesNo(replacesFinishedMatch)}, " +
+                    "reopensSameFinishedLiveMatch=${yesNo(reopensSameFinishedLiveMatch)}, " +
+                    "lastFinishedMatchId=$lastFinishedMatchId, " +
+                    "lifecycleBefore=${matchLifecycleState.name}"
+        )
 
-        if (matchChanged || replacesFinishedMatch) {
+        if (
+            matchChanged ||
+            replacesFinishedMatch ||
+            reopensSameFinishedLiveMatch
+        ) {
             activateNewLiveMatch(
                 match.matchId
             )
+
+            if (matchChanged) {
+                restartBleScanForNewLiveMatch(
+                    match.matchId
+                )
+            }
         }
 
         val shouldBootstrapScore =
             matchChanged ||
                     replacesFinishedMatch ||
+                    reopensSameFinishedLiveMatch ||
                     isLocalScoreEmptyForLiveMatchBootstrap()
+        logArenaRuntimeDiag(
+            "applyLiveMatchResponse bootstrap decision: " +
+                    "shouldBootstrap=${yesNo(shouldBootstrapScore)}, " +
+                    "localBeforeGamesA=$gamesA, " +
+                    "localBeforeGamesB=$gamesB, " +
+                    "lifecycleBefore=${matchLifecycleState.name}"
+        )
 
         currentLiveMatchId =
             match.matchId
@@ -985,6 +1327,16 @@ class MainActivity : AppCompatActivity() {
 
         arenaLastCallText.text =
             "Partita live aggiornata"
+        logArenaRuntimeDiag(
+            "applyLiveMatchResponse end: " +
+                    "lifecycleAfter=${matchLifecycleState.name}, " +
+                    "currentLiveMatchId=$currentLiveMatchId, " +
+                    "localGamesA=$gamesA, " +
+                    "localGamesB=$gamesB, " +
+                    "localPointsA=${displayPointForSide(Side.A)}, " +
+                    "localPointsB=${displayPointForSide(Side.B)}, " +
+                    "localMatchFinished=$localMatchFinished"
+        )
     }
 
     private fun activateNewLiveMatch(
@@ -1000,6 +1352,39 @@ class MainActivity : AppCompatActivity() {
         clearMatchLifecycleState()
         localMatchFinished = false
         scoreHistory.clear()
+        clearBleDedupStateForNewLiveMatch()
+    }
+
+    private fun restartBleScanForNewLiveMatch(
+        matchId: String
+    ) {
+        if (
+            lastBleRestartedLiveMatchId == matchId ||
+            bleScanRestartPending ||
+            !activityVisible ||
+            !hasAnyShellyAssociation() ||
+            assignmentMode != null ||
+            !isBluetoothReadyForScan() ||
+            !hasBleScanPermissions()
+        ) {
+            return
+        }
+
+        lastBleRestartedLiveMatchId =
+            matchId
+
+        restartBleScanSafely(
+            reason = "new_live_match",
+            delayMs = BLE_NEW_LIVE_MATCH_RESTART_DELAY_MS
+        )
+    }
+
+    private fun clearBleDedupStateForNewLiveMatch() {
+        lastPacketIdByDevice.clear()
+        lastFallbackEventByDevice.clear()
+        logBleDebug(
+            "BLE dedup reset: new_live_match"
+        )
     }
 
     private fun updateTeamLabels(
@@ -1902,7 +2287,9 @@ class MainActivity : AppCompatActivity() {
             bleScanRestartPending ||
             !activityVisible ||
             !hasAnyShellyAssociation() ||
-            assignmentMode != null
+            assignmentMode != null ||
+            !isBluetoothReadyForScan() ||
+            !hasBleScanPermissions()
         ) {
             return
         }
@@ -1926,7 +2313,9 @@ class MainActivity : AppCompatActivity() {
                 if (
                     activityVisible &&
                     hasAnyShellyAssociation() &&
-                    assignmentMode == null
+                    assignmentMode == null &&
+                    isBluetoothReadyForScan() &&
+                    hasBleScanPermissions()
                 ) {
                     checkPermissionsAndStart()
                 }
@@ -2095,6 +2484,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun maskedBleDeviceId(
+        deviceId: String?
+    ): String {
+        val normalized =
+            deviceId?.trim().orEmpty()
+
+        if (normalized.isBlank()) {
+            return "unknown"
+        }
+
+        return "***" +
+                normalized.takeLast(
+                    5
+                )
+    }
+
     @SuppressLint("MissingPermission")
     private fun startBleScan() {
         val bluetoothAdapter =
@@ -2217,6 +2622,12 @@ class MainActivity : AppCompatActivity() {
                 callbackType: Int,
                 result: ScanResult
             ) {
+                logBleDebug(
+                    "BLE app callback: onScanResult device=" +
+                            maskedBleDeviceId(
+                                result.device?.address
+                            )
+                )
                 processScanResult(result)
             }
 
@@ -2259,14 +2670,43 @@ class MainActivity : AppCompatActivity() {
         result: ScanResult
     ) {
         val scanRecord =
-            result.scanRecord ?: return
+            result.scanRecord
+
+        if (scanRecord == null) {
+            logBleDebug(
+                "BLE packet received=no device=" +
+                        maskedBleDeviceId(
+                            result.device?.address
+                        ) +
+                        " reason=no_scan_record"
+            )
+            return
+        }
 
         val serviceData =
             scanRecord.getServiceData(
                 bthomeUuid
-            ) ?: return
+            )
+
+        if (serviceData == null) {
+            logBleDebug(
+                "BLE packet received=no device=" +
+                        maskedBleDeviceId(
+                            result.device?.address
+                        ) +
+                        " reason=no_bthome_service"
+            )
+            return
+        }
 
         if (serviceData.isEmpty()) {
+            logBleDebug(
+                "BLE packet received=no device=" +
+                        maskedBleDeviceId(
+                            result.device?.address
+                        ) +
+                        " reason=empty_service_data"
+            )
             return
         }
 
@@ -2277,6 +2717,13 @@ class MainActivity : AppCompatActivity() {
             deviceInfo and 0x01 != 0
 
         if (encrypted) {
+            logBleDebug(
+                "BLE parse valid=no device=" +
+                        maskedBleDeviceId(
+                            result.device?.address
+                        ) +
+                        " reason=encrypted"
+            )
             runOnUiThread {
                 statusText.text =
                     "Shelly rilevato ma dati cifrati"
@@ -2294,8 +2741,26 @@ class MainActivity : AppCompatActivity() {
                 ?: try {
                     result.device.address
                 } catch (_: SecurityException) {
+                    logBleDebug(
+                        "BLE packet received=no device=unknown reason=address_denied"
+                    )
                     return
                 }
+
+        val associatedDevice =
+            stableDeviceId == deviceA ||
+                    stableDeviceId == deviceB
+
+        logBleDebug(
+            "BLE packet received=yes device=" +
+                    maskedBleDeviceId(
+                        stableDeviceId
+                    ) +
+                    " associated=" +
+                    associatedDevice +
+                    " serviceData=" +
+                    serviceData.toHexString()
+        )
 
         lastBlePacketReceivedAt =
             SystemClock.elapsedRealtime()
@@ -2307,7 +2772,42 @@ class MainActivity : AppCompatActivity() {
 
         val buttonEvent =
             parsedPacket.buttonEvent
-                ?: return
+
+        logBleDebug(
+            "BLE button event: device=" +
+                    maskedBleDeviceId(
+                        stableDeviceId
+                    ) +
+                    " rawCode=" +
+                    (parsedPacket.rawButtonEventCode?.toString() ?: "none") +
+                    " parsed=" +
+                    (buttonEvent?.name ?: "UNKNOWN") +
+                    " packetId=" +
+                    (parsedPacket.packetId?.toString() ?: "none") +
+                    " associated=" +
+                    associatedDevice +
+                    " parse=" +
+                    (if (buttonEvent != null) {
+                        "accepted"
+                    } else {
+                        "rejected reason=unsupported_button_code"
+                    })
+        )
+
+        if (buttonEvent == null) {
+            logBleDebug(
+                "BLE button event: device=" +
+                        maskedBleDeviceId(
+                            stableDeviceId
+                        ) +
+                        " rawCode=" +
+                        (parsedPacket.rawButtonEventCode?.toString() ?: "none") +
+                        " parsed=UNKNOWN packetId=" +
+                        (parsedPacket.packetId?.toString() ?: "none") +
+                        " dedup=not_run dispatch=none reason=unsupported_button_code"
+            )
+            return
+        }
 
         lastBleButtonEventAt =
             SystemClock.elapsedRealtime()
@@ -2319,6 +2819,12 @@ class MainActivity : AppCompatActivity() {
             currentAssignment != null &&
             System.currentTimeMillis() < assignmentArmedAt
         ) {
+            logBleDebug(
+                "BLE dedup skipped: assignment_not_armed device=" +
+                        maskedBleDeviceId(
+                            stableDeviceId
+                        )
+            )
             return
         }
 
@@ -2329,18 +2835,48 @@ class MainActivity : AppCompatActivity() {
             parsedPacket.packetId
 
         if (packetId != null) {
+            val dedupKey =
+                BlePacketDedupKey(
+                    packetId = packetId,
+                    rawButtonEventCode = parsedPacket.rawButtonEventCode
+                )
+
             val previousPacketId =
                 lastPacketIdByDevice[
                     stableDeviceId
                 ]
 
-            if (previousPacketId == packetId) {
+            if (previousPacketId == dedupKey) {
+                logBleDebug(
+                    "BLE dedup reject: duplicate_packet_id device=" +
+                            maskedBleDeviceId(
+                                stableDeviceId
+                            ) +
+                            " rawCode=" +
+                            (parsedPacket.rawButtonEventCode?.toString() ?: "none") +
+                            " parsed=" +
+                            buttonEvent.name +
+                            " packetId=$packetId" +
+                            " dispatch=none reason=duplicate_packet_id"
+                )
                 return
             }
 
             lastPacketIdByDevice[
                 stableDeviceId
-            ] = packetId
+            ] = dedupKey
+            logBleDebug(
+                "BLE dedup accept: packet_id device=" +
+                        maskedBleDeviceId(
+                            stableDeviceId
+                        ) +
+                        " rawCode=" +
+                        (parsedPacket.rawButtonEventCode?.toString() ?: "none") +
+                        " parsed=" +
+                        buttonEvent.name +
+                        " packetId=$packetId" +
+                        " dedup=accepted"
+            )
         } else {
             /*
              * Protezione di riserva per eventuali pacchetti
@@ -2363,6 +2899,17 @@ class MainActivity : AppCompatActivity() {
                 now - previous.timestamp <
                 FALLBACK_DUPLICATE_WINDOW_MS
             ) {
+                logBleDebug(
+                    "BLE dedup reject: fallback_window device=" +
+                            maskedBleDeviceId(
+                                stableDeviceId
+                            ) +
+                            " rawCode=" +
+                            (parsedPacket.rawButtonEventCode?.toString() ?: "none") +
+                            " parsed=" +
+                            buttonEvent.name +
+                            " dispatch=none reason=fallback_window"
+                )
                 return
             }
 
@@ -2372,7 +2919,58 @@ class MainActivity : AppCompatActivity() {
                 packetHex = packetHex,
                 timestamp = now
             )
+            logBleDebug(
+                "BLE dedup accept: fallback device=" +
+                        maskedBleDeviceId(
+                            stableDeviceId
+                        ) +
+                        " rawCode=" +
+                        (parsedPacket.rawButtonEventCode?.toString() ?: "none") +
+                        " parsed=" +
+                        buttonEvent.name +
+                        " dedup=accepted"
+            )
         }
+
+        val dispatchTarget =
+            when (buttonEvent) {
+                ButtonEvent.SINGLE_PRESS ->
+                    "score_single"
+
+                ButtonEvent.DOUBLE_PRESS ->
+                    "undo"
+
+                ButtonEvent.TRIPLE_PRESS ->
+                    "correct_game"
+
+                ButtonEvent.LONG_PRESS,
+                ButtonEvent.HOLD_PRESS ->
+                    "finish_match"
+            }
+
+        logBleDebug(
+            "BLE button event: device=" +
+                    maskedBleDeviceId(
+                        stableDeviceId
+                    ) +
+                    " rawCode=" +
+                    (parsedPacket.rawButtonEventCode?.toString() ?: "none") +
+                    " parsed=" +
+                    buttonEvent.name +
+                    " packetId=" +
+                    (packetId?.toString() ?: "none") +
+                    " dedup=accepted dispatch=" +
+                    dispatchTarget
+        )
+
+        logBleDebug(
+            "BLE dispatch: buttonEvent=" +
+                    buttonEvent.name +
+                    " device=" +
+                    maskedBleDeviceId(
+                        stableDeviceId
+                    )
+        )
 
         runOnUiThread {
             handleButtonEvent(
@@ -2489,6 +3087,7 @@ class MainActivity : AppCompatActivity() {
         var index = 1
 
         var packetId: Int? = null
+        var rawButtonEventCode: Int? = null
         var buttonEvent: ButtonEvent? = null
 
         while (index < serviceData.size) {
@@ -2534,6 +3133,9 @@ class MainActivity : AppCompatActivity() {
                     val eventCode =
                         serviceData[index + 1]
                             .toInt() and 0xFF
+
+                    rawButtonEventCode =
+                        eventCode
 
                     buttonEvent =
                         ButtonEvent.fromCode(
@@ -2597,6 +3199,7 @@ class MainActivity : AppCompatActivity() {
 
         return ParsedShellyPacket(
             packetId = packetId,
+            rawButtonEventCode = rawButtonEventCode,
             buttonEvent = buttonEvent
         )
     }
@@ -2636,6 +3239,12 @@ class MainActivity : AppCompatActivity() {
             }
 
         if (side == null) {
+            logBleDebug(
+                "BLE scoring dispatch=no reason=unassociated device=" +
+                        maskedBleDeviceId(
+                            deviceIdentifier
+                        )
+            )
             statusText.text =
                 "Shelly non associato"
 
@@ -2644,6 +3253,17 @@ class MainActivity : AppCompatActivity() {
 
             return
         }
+
+        Log.i(
+            ARENA_LOG_TAG,
+            "Arena input dispatch: " +
+                    "event=${buttonEvent.name}, " +
+                    "side=${side.name}, " +
+                    "currentLiveMatchId=$currentLiveMatchId, " +
+                    "correctionMatchId=$correctingPreviousMatchId, " +
+                    "lifecycle=${matchLifecycleState.name}, " +
+                    "localMatchFinished=$localMatchFinished"
+        )
 
         when (buttonEvent) {
             ButtonEvent.SINGLE_PRESS ->
@@ -2677,6 +3297,15 @@ class MainActivity : AppCompatActivity() {
             matchLifecycleState !=
             MatchLifecycleState.ACTIVE
         ) {
+            Log.i(
+                ARENA_LOG_TAG,
+                "Arena input blocked: " +
+                        "event=TRIPLE_PRESS, " +
+                        "reason=lifecycle, " +
+                        "currentLiveMatchId=$currentLiveMatchId, " +
+                        "correctionMatchId=$correctingPreviousMatchId, " +
+                        "lifecycle=${matchLifecycleState.name}"
+            )
             statusText.text =
                 "Operazione in corso"
 
@@ -2761,6 +3390,15 @@ class MainActivity : AppCompatActivity() {
 
             MatchLifecycleState.FINISHING,
             MatchLifecycleState.REOPENING -> {
+                Log.i(
+                    ARENA_LOG_TAG,
+                    "Arena input blocked: " +
+                            "event=DOUBLE_PRESS, " +
+                            "reason=lifecycle, " +
+                            "currentLiveMatchId=$currentLiveMatchId, " +
+                            "correctionMatchId=$correctingPreviousMatchId, " +
+                            "lifecycle=${matchLifecycleState.name}"
+                )
                 statusText.text =
                     "Operazione in corso"
 
@@ -3062,6 +3700,22 @@ class MainActivity : AppCompatActivity() {
             matchLifecycleState !=
             MatchLifecycleState.ACTIVE
         ) {
+            logArenaRuntimeDiag(
+                "registerPoint blocked: " +
+                        "reason=lifecycle_not_active, " +
+                        "lifecycle=${matchLifecycleState.name}, " +
+                        "localMatchFinished=$localMatchFinished, " +
+                        "currentLiveMatchId=$currentLiveMatchId, " +
+                        "correctionMatchId=$correctingPreviousMatchId"
+            )
+            logBleDebug(
+                "BLE scoring dispatch=no reason=lifecycle state=" +
+                        matchLifecycleState.name +
+                        " currentLiveMatchId=" +
+                        currentLiveMatchId +
+                        " correctionMatchId=" +
+                        correctingPreviousMatchId
+            )
             statusText.text =
                 "Operazione in corso"
 
@@ -3076,6 +3730,11 @@ class MainActivity : AppCompatActivity() {
                 }
             return
         }
+
+        logBleDebug(
+            "BLE scoring dispatch=yes side=" +
+                    scoringSide.name
+        )
 
         saveSnapshot(
             scoringSide
@@ -3559,6 +4218,15 @@ class MainActivity : AppCompatActivity() {
             matchLifecycleState ==
             MatchLifecycleState.REOPENING
         ) {
+            Log.i(
+                ARENA_LOG_TAG,
+                "Arena input blocked: " +
+                        "event=LONG_PRESS, " +
+                        "reason=lifecycle, " +
+                        "currentLiveMatchId=$currentLiveMatchId, " +
+                        "correctionMatchId=$correctingPreviousMatchId, " +
+                        "lifecycle=${matchLifecycleState.name}"
+            )
             statusText.text =
                 "Operazione in corso"
 
@@ -3571,6 +4239,14 @@ class MainActivity : AppCompatActivity() {
             matchLifecycleState ==
             MatchLifecycleState.FINISHED_BY_ARENA
         ) {
+            Log.i(
+                ARENA_LOG_TAG,
+                "Arena input blocked: " +
+                        "event=LONG_PRESS, " +
+                        "reason=finished_by_arena, " +
+                        "currentLiveMatchId=$currentLiveMatchId, " +
+                        "correctionMatchId=$correctingPreviousMatchId"
+            )
             statusText.text =
                 "Partita conclusa"
 
@@ -3726,6 +4402,7 @@ class MainActivity : AppCompatActivity() {
                     )
                     if (reopenedClosedMatchForCorrection) {
                         reopenedClosedMatchForCorrection = false
+                        correctingPreviousMatchId = null
                         if (activityVisible) {
                             startLiveMatchPolling()
                         }
@@ -3918,7 +4595,21 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 if (isReopenSuccess(result.status)) {
+                    Log.i(
+                        ARENA_LOG_TAG,
+                        "Arena correction reopen success: " +
+                                "matchId=${lastClosedMatch.matchId}, " +
+                                "currentLiveMatchIdBefore=$currentLiveMatchId, " +
+                                "lifecycleBefore=${matchLifecycleState.name}, " +
+                                "localMatchFinishedBefore=$localMatchFinished, " +
+                                "restoreGamesA=${lastClosedMatch.gamesA}, " +
+                                "restoreGamesB=${lastClosedMatch.gamesB}, " +
+                                "restorePointsA=${lastClosedMatch.pointsA}, " +
+                                "restorePointsB=${lastClosedMatch.pointsB}"
+                    )
                     currentLiveMatchId =
+                        lastClosedMatch.matchId
+                    correctingPreviousMatchId =
                         lastClosedMatch.matchId
                     updateTeamLabels(
                         lastClosedMatch.teamLabelA,
@@ -3933,6 +4624,23 @@ class MainActivity : AppCompatActivity() {
                     reopenedClosedMatchForCorrection = true
                     saveState()
                     updateScreen()
+                    restartBleScanSafely(
+                        reason = "reopened_previous_match",
+                        delayMs = 0L
+                    )
+
+                    Log.i(
+                        ARENA_LOG_TAG,
+                        "Arena correction restore applied: " +
+                                "matchId=$currentLiveMatchId, " +
+                                "correctionMatchId=$correctingPreviousMatchId, " +
+                                "lifecycleAfter=${matchLifecycleState.name}, " +
+                                "localMatchFinishedAfter=$localMatchFinished, " +
+                                "gamesA=$gamesA, " +
+                                "gamesB=$gamesB, " +
+                                "pointsA=${displayPointForSide(Side.A)}, " +
+                                "pointsB=${displayPointForSide(Side.B)}"
+                    )
 
                     statusText.text =
                         "Partita riaperta per correzione"
@@ -3947,6 +4655,7 @@ class MainActivity : AppCompatActivity() {
                 restoreSuspendedCurrentMatch(
                     suspendedCurrentMatch
                 )
+                correctingPreviousMatchId = null
                 saveState()
                 updateScreen()
                 statusText.text =
@@ -4253,7 +4962,13 @@ enum class MatchLifecycleState {
 
 data class ParsedShellyPacket(
     val packetId: Int?,
+    val rawButtonEventCode: Int?,
     val buttonEvent: ButtonEvent?
+)
+
+data class BlePacketDedupKey(
+    val packetId: Int,
+    val rawButtonEventCode: Int?
 )
 
 data class FallbackEvent(

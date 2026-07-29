@@ -95,6 +95,85 @@ class MainActivityLiveMatchBootstrapSourceTest {
     }
 
     @Test
+    fun restoredSessionRestartsPollingWhenTokenArrivesAfterOnStart() {
+        val source =
+            mainActivitySource()
+        val onStartBody =
+            methodSlice(
+                source = source,
+                startMarker = "override fun onStart()",
+                endMarker = "override fun onResume()"
+            )
+        val bootstrapBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun bootstrapArenaSession()",
+                endMarker = "private fun startLiveMatchPolling()"
+            )
+
+        assertTrue(onStartBody.contains("activityVisible = true"))
+        assertTrue(onStartBody.contains("startLiveMatchPolling()"))
+        assertTrue(bootstrapBody.contains("ArenaSessionRestoreResult.RESTORED"))
+        assertTrue(bootstrapBody.contains("arenaCourtSelection == null"))
+        assertTrue(bootstrapBody.contains("activityVisible"))
+        assertTrue(bootstrapBody.contains("startLiveMatchPolling()"))
+        assertTrue(bootstrapBody.contains("refreshLiveMatchIfNeeded()"))
+        assertTrue(
+            bootstrapBody.indexOf("activityVisible") <
+                    bootstrapBody.indexOf("startLiveMatchPolling()")
+        )
+    }
+
+    @Test
+    fun liveMatchPollingRescheduleRemovesPreviousTimer() {
+        val startBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun startLiveMatchPolling()",
+                endMarker = "private fun refreshLiveMatchIfNeeded()"
+            )
+        val scheduleBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun scheduleNextLiveMatchPoll()",
+                endMarker = "private fun refreshLiveMatchIfNeeded()"
+            )
+
+        assertTrue(startBody.contains("liveMatchPollingActive = true"))
+        assertTrue(startBody.contains("scheduleNextLiveMatchPoll()"))
+        assertTrue(scheduleBody.contains("liveMatchPollingHandler.removeCallbacks("))
+        assertTrue(scheduleBody.contains("liveMatchPollingHandler.postDelayed("))
+        assertTrue(
+            scheduleBody.indexOf("removeCallbacks(") <
+                    scheduleBody.indexOf("postDelayed(")
+        )
+    }
+
+    @Test
+    fun liveMatchRefreshLogsNonSensitiveSkipReasons() {
+        val source =
+            mainActivitySource()
+        val refreshBody =
+            methodSlice(
+                source = source,
+                startMarker = "private fun refreshLiveMatchIfNeeded()",
+                endMarker = "private fun reloadArenaCourtSelection()"
+            )
+
+        assertTrue(refreshBody.contains("logLiveMatchSkip("))
+        assertTrue(refreshBody.contains("\"standalone\""))
+        assertTrue(refreshBody.contains("\"request_in_flight\""))
+        assertTrue(refreshBody.contains("\"no_court\""))
+        assertTrue(refreshBody.contains("\"no_client\""))
+        assertTrue(refreshBody.contains("\"no_token\""))
+        assertTrue(refreshBody.contains("BuildConfig.DEBUG"))
+        assertFalse(refreshBody.contains("Authorization"))
+        assertFalse(refreshBody.contains("Bearer"))
+        assertFalse(refreshBody.contains("refreshToken"))
+        assertFalse(refreshBody.contains("password"))
+    }
+
+    @Test
     fun newLiveMatchClearsFinishedLifecycleBeforeItBecomesCurrent() {
         val body =
             applyLiveMatchResponseBody()
@@ -115,6 +194,141 @@ class MainActivityLiveMatchBootstrapSourceTest {
                     body.indexOf("bootstrapLocalScoreFromLiveMatch(")
         )
         assertTrue(body.contains("replacesFinishedMatch ||"))
+    }
+
+    @Test
+    fun sameFinishedMatchStillReturnedAsLiveIsReactivatedAndBootstrapped() {
+        val body =
+            applyLiveMatchResponseBody()
+
+        assertTrue(body.contains("val reopensSameFinishedLiveMatch"))
+        assertTrue(body.contains("lastFinishedMatchId == match.matchId"))
+        assertTrue(body.contains("reopensSameFinishedLiveMatch ||"))
+        assertTrue(body.contains("activateNewLiveMatch("))
+        assertTrue(body.contains("bootstrapLocalScoreFromLiveMatch("))
+        assertTrue(body.contains("adoptBootstrappedLiveScoreIfNeeded("))
+        assertTrue(
+            body.indexOf("activateNewLiveMatch(") <
+                    body.indexOf("val shouldBootstrapScore")
+        )
+        assertTrue(
+            body.indexOf("reopensSameFinishedLiveMatch ||") <
+                    body.indexOf("isLocalScoreEmptyForLiveMatchBootstrap()")
+        )
+    }
+
+    @Test
+    fun newMatchStillUsesExistingFinishedLifecycleReplacementPath() {
+        val body =
+            applyLiveMatchResponseBody()
+
+        assertTrue(body.contains("val replacesFinishedMatch"))
+        assertTrue(body.contains("lastFinishedMatchId != match.matchId"))
+        assertTrue(body.contains("matchChanged ||"))
+        assertTrue(body.contains("replacesFinishedMatch ||"))
+        assertTrue(body.contains("restartBleScanForNewLiveMatch("))
+    }
+
+    @Test
+    fun noLiveMatchDoesNotReactivateFinishedLifecycle() {
+        val body =
+            applyLiveMatchResponseBody()
+        val nullBranch =
+            body.substring(
+                body.indexOf("if (match == null)"),
+                body.indexOf("arenaLifecycleSequenceStore.advanceToAtLeast(")
+            )
+
+        assertFalse(nullBranch.contains("activateNewLiveMatch("))
+        assertFalse(nullBranch.contains("clearMatchLifecycleState("))
+        assertFalse(nullBranch.contains("bootstrapLocalScoreFromLiveMatch("))
+        assertFalse(nullBranch.contains("adoptBootstrappedLiveScoreIfNeeded("))
+    }
+
+    @Test
+    fun repeatedSameLiveMatchPollingDoesNotReactivateWhenAlreadyActive() {
+        val body =
+            applyLiveMatchResponseBody()
+        val activateBody =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun activateNewLiveMatch(",
+                endMarker = "private fun restartBleScanForNewLiveMatch("
+            )
+
+        assertTrue(body.contains("matchLifecycleState == MatchLifecycleState.FINISHED_BY_ARENA"))
+        assertTrue(body.contains("reopensSameFinishedLiveMatch"))
+        assertTrue(activateBody.contains("currentLiveMatchId == matchId"))
+        assertTrue(activateBody.contains("matchLifecycleState == MatchLifecycleState.ACTIVE"))
+        assertTrue(activateBody.contains("return"))
+    }
+
+    @Test
+    fun newLiveMatchSchedulesOneControlledBleRestartAfterLifecycleReset() {
+        val body =
+            applyLiveMatchResponseBody()
+
+        assertTrue(body.contains("if (matchChanged)"))
+        assertTrue(body.contains("restartBleScanForNewLiveMatch("))
+        assertTrue(body.contains("match.matchId"))
+        assertTrue(
+            body.indexOf("activateNewLiveMatch(") <
+                    body.indexOf("restartBleScanForNewLiveMatch(")
+        )
+        assertTrue(
+            body.indexOf("restartBleScanForNewLiveMatch(") <
+                    body.indexOf("currentLiveMatchId =")
+        )
+    }
+
+    @Test
+    fun firstBootstrapAndMatchNullDoNotForceBleRestart() {
+        val body =
+            applyLiveMatchResponseBody()
+        val nullBranch =
+            body.substring(
+                body.indexOf("if (match == null)"),
+                body.indexOf("arenaLifecycleSequenceStore.advanceToAtLeast(")
+            )
+
+        assertTrue(body.contains("previousLiveMatchId != null"))
+        assertTrue(body.contains("previousLiveMatchId != match.matchId"))
+        assertFalse(body.contains("previousLiveMatchId == null"))
+        assertFalse(nullBranch.contains("restartBleScanForNewLiveMatch("))
+        assertFalse(nullBranch.contains("restartBleScanSafely("))
+    }
+
+    @Test
+    fun newLiveMatchBleRestartIsGuardedAndDoesNotTouchScoreOrSync() {
+        val source =
+            mainActivitySource()
+        val body =
+            methodSlice(
+                source = source,
+                startMarker = "private fun restartBleScanForNewLiveMatch(",
+                endMarker = "private fun updateTeamLabels("
+            )
+
+        assertTrue(source.contains("BLE_NEW_LIVE_MATCH_RESTART_DELAY_MS = 500L"))
+        assertTrue(source.contains("lastBleRestartedLiveMatchId"))
+        assertTrue(body.contains("lastBleRestartedLiveMatchId == matchId"))
+        assertTrue(body.contains("bleScanRestartPending"))
+        assertTrue(body.contains("!activityVisible"))
+        assertTrue(body.contains("!hasAnyShellyAssociation()"))
+        assertTrue(body.contains("assignmentMode != null"))
+        assertTrue(body.contains("!isBluetoothReadyForScan()"))
+        assertTrue(body.contains("!hasBleScanPermissions()"))
+        assertTrue(body.contains("lastBleRestartedLiveMatchId ="))
+        assertTrue(body.contains("restartBleScanSafely("))
+        assertTrue(body.contains("reason = \"new_live_match\""))
+        assertTrue(body.contains("delayMs = BLE_NEW_LIVE_MATCH_RESTART_DELAY_MS"))
+        assertFalse(body.contains("pointsA ="))
+        assertFalse(body.contains("pointsB ="))
+        assertFalse(body.contains("gamesA ="))
+        assertFalse(body.contains("gamesB ="))
+        assertFalse(body.contains("enqueueArenaSnapshot("))
+        assertFalse(body.contains("adoptBootstrappedLiveScoreIfNeeded("))
+        assertFalse(body.contains("ArenaRealScoreSync"))
     }
 
     @Test
@@ -147,6 +361,7 @@ class MainActivityLiveMatchBootstrapSourceTest {
         assertTrue(body.contains("clearMatchLifecycleState()"))
         assertTrue(body.contains("localMatchFinished = false"))
         assertTrue(body.contains("scoreHistory.clear()"))
+        assertTrue(body.contains("clearBleDedupStateForNewLiveMatch()"))
         assertFalse(body.contains("deviceA ="))
         assertFalse(body.contains("deviceB ="))
         assertFalse(body.contains("stopBleScan("))
@@ -155,6 +370,26 @@ class MainActivityLiveMatchBootstrapSourceTest {
         assertFalse(body.contains("arenaCourtSelection ="))
         assertFalse(body.contains("enqueueArenaSnapshot("))
         assertFalse(body.contains("ArenaRealScoreSync"))
+    }
+
+    @Test
+    fun newLiveMatchClearsOnlyBleDedupStateWithoutChangingAssociations() {
+        val body =
+            methodSlice(
+                source = mainActivitySource(),
+                startMarker = "private fun clearBleDedupStateForNewLiveMatch()",
+                endMarker = "private fun updateTeamLabels("
+            )
+
+        assertTrue(body.contains("lastPacketIdByDevice.clear()"))
+        assertTrue(body.contains("lastFallbackEventByDevice.clear()"))
+        assertTrue(body.contains("BLE dedup reset: new_live_match"))
+        assertFalse(body.contains("deviceA ="))
+        assertFalse(body.contains("deviceB ="))
+        assertFalse(body.contains("parseShellyPacket("))
+        assertFalse(body.contains("ButtonEvent.fromCode("))
+        assertFalse(body.contains("registerPoint("))
+        assertFalse(body.contains("enqueueArenaSnapshot("))
     }
 
     @Test

@@ -188,6 +188,11 @@ class MainActivityBleBootstrapSourceTest {
             )
 
         assertTrue(body.contains("bleScanRestartPending"))
+        assertTrue(body.contains("!activityVisible"))
+        assertTrue(body.contains("!hasAnyShellyAssociation()"))
+        assertTrue(body.contains("assignmentMode != null"))
+        assertTrue(body.contains("!isBluetoothReadyForScan()"))
+        assertTrue(body.contains("!hasBleScanPermissions()"))
         assertTrue(body.contains("stopBleScanInternal("))
         assertTrue(body.contains("clearAssignment = false"))
         assertTrue(body.contains("postDelayed("))
@@ -210,6 +215,123 @@ class MainActivityBleBootstrapSourceTest {
         assertTrue(body.contains("BLE scan failed: \$errorCode"))
         assertTrue(body.contains("restartBleScanSafely("))
         assertTrue(body.contains("BLE_SCAN_FAILURE_RETRY_DELAY_MS"))
+    }
+
+    @Test
+    fun restartedScanStillDispatchesSinglePressToNormalScoringPath() {
+        val restartBody =
+            methodBody(
+                "private fun restartBleScanSafely(",
+                "private fun beginAssignment("
+            )
+        val scanCallbackBody =
+            methodBody(
+                "private val scanCallback =",
+                "private fun processScanResult("
+            )
+        val processBody =
+            methodBody(
+                "private fun processScanResult(",
+                "private fun extractShellyMac("
+            )
+        val handleBody =
+            methodBody(
+                "private fun handleButtonEvent(",
+                "private fun correctGameForSide("
+            )
+
+        assertTrue(restartBody.contains("checkPermissionsAndStart()"))
+        assertTrue(scanCallbackBody.contains("processScanResult(result)"))
+        assertTrue(processBody.contains("handleButtonEvent("))
+        assertTrue(handleBody.contains("ButtonEvent.SINGLE_PRESS"))
+        assertTrue(handleBody.contains("registerPoint(side)"))
+    }
+
+    @Test
+    fun bleDiagnosticsCoverCallbackParseDedupButtonAndDispatchWithoutSecrets() {
+        val source =
+            mainActivitySource()
+        val processBody =
+            methodBody(
+                "private fun processScanResult(",
+                "private fun extractShellyMac("
+            )
+        val handleBody =
+            methodBody(
+                "private fun handleButtonEvent(",
+                "private fun correctGameForSide("
+            )
+        val registerBody =
+            methodBody(
+                "private fun registerPoint(",
+                "private fun registerStandaloneClassicPoint("
+            )
+
+        assertTrue(source.contains("BLE app callback: onScanResult"))
+        assertTrue(source.contains("maskedBleDeviceId("))
+        assertTrue(processBody.contains("BLE packet received=no"))
+        assertTrue(processBody.contains("BLE packet received=yes"))
+        assertTrue(processBody.contains("associated="))
+        assertTrue(processBody.contains("BLE parse valid="))
+        assertTrue(processBody.contains("BLE button event: device="))
+        assertTrue(processBody.contains("rawCode="))
+        assertTrue(processBody.contains("parsed="))
+        assertTrue(processBody.contains("unsupported_button_code"))
+        assertTrue(processBody.contains("packetId="))
+        assertTrue(processBody.contains("buttonEvent="))
+        assertTrue(processBody.contains("BLE dedup accept: packet_id"))
+        assertTrue(processBody.contains("BLE dedup reject: duplicate_packet_id"))
+        assertTrue(source.contains("mutableMapOf<String, BlePacketDedupKey>()"))
+        assertTrue(processBody.contains("rawButtonEventCode = parsedPacket.rawButtonEventCode"))
+        assertTrue(processBody.contains("previousPacketId == dedupKey"))
+        assertTrue(processBody.contains("BLE dedup accept: fallback"))
+        assertTrue(processBody.contains("BLE dedup reject: fallback_window"))
+        assertTrue(processBody.contains("dispatchTarget"))
+        assertTrue(processBody.contains("\"finish_match\""))
+        assertTrue(processBody.contains("BLE dispatch: buttonEvent="))
+        assertTrue(handleBody.contains("BLE scoring dispatch=no reason=unassociated"))
+        assertTrue(registerBody.contains("BLE scoring dispatch=no reason=lifecycle"))
+        assertTrue(registerBody.contains("BLE scoring dispatch=yes side="))
+        val diagnosticBodies =
+            processBody + handleBody + registerBody
+
+        assertFalse(diagnosticBodies.contains("Authorization"))
+        assertFalse(diagnosticBodies.contains("access token"))
+        assertFalse(diagnosticBodies.contains("refresh token"))
+        assertFalse(diagnosticBodies.contains("password"))
+    }
+
+    @Test
+    fun longPressDiagnosticsAndDispatchReachFinishWithoutChangingOtherGestures() {
+        val source =
+            mainActivitySource()
+        val processBody =
+            methodBody(
+                "private fun processScanResult(",
+                "private fun extractShellyMac("
+            )
+        val handleBody =
+            methodBody(
+                "private fun handleButtonEvent(",
+                "private fun correctGameForSide("
+            )
+
+        assertTrue(source.contains("LONG_PRESS(0x04)"))
+        assertTrue(source.contains("HOLD_PRESS(0x80)"))
+        assertTrue(source.contains("data class BlePacketDedupKey"))
+        assertTrue(processBody.contains("rawButtonEventCode"))
+        assertTrue(processBody.contains("BlePacketDedupKey("))
+        assertTrue(processBody.contains("dispatchTarget"))
+        assertTrue(processBody.contains("\"finish_match\""))
+        assertTrue(handleBody.contains("ButtonEvent.SINGLE_PRESS ->"))
+        assertTrue(handleBody.contains("registerPoint(side)"))
+        assertTrue(handleBody.contains("ButtonEvent.DOUBLE_PRESS ->"))
+        assertTrue(handleBody.contains("handleDoublePress()"))
+        assertTrue(handleBody.contains("ButtonEvent.TRIPLE_PRESS ->"))
+        assertTrue(handleBody.contains("correctGameForSide(side)"))
+        assertTrue(handleBody.contains("ButtonEvent.LONG_PRESS,"))
+        assertTrue(handleBody.contains("ButtonEvent.HOLD_PRESS ->"))
+        assertTrue(handleBody.contains("handleLongPress()"))
     }
 
     @Test
